@@ -1,5 +1,7 @@
 # In-memory graph storage prototype
 
+> **Start here:** [FINAL_REPORT.md](FINAL_REPORT.md) summarizes results and recommendations for cold readers.
+
 This C++17 prototype compares forward-adjacency hashing, bidirectional
 adjacency hashing, and bidirectional CSR+CSC for dense integer vertex IDs and
 typed directed edges.
