@@ -2,7 +2,7 @@ CXX ?= c++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wpedantic
 CPPFLAGS ?= -Iinclude
 
-.PHONY: all test benchmark benchmark-rss benchmark-schema-check benchmark-matrix clean
+.PHONY: all test benchmark benchmark-rss benchmark-schema-check benchmark-matrix benchmark-recovery clean
 
 all: test
 
@@ -21,11 +21,18 @@ benchmark-schema-check: build/graph_storage_bench
 benchmark-matrix: build/graph_storage_bench
 	./scripts/run_benchmark_matrix.sh
 
-build/graph_storage_test: tests/graph_storage_test.cpp include/graph_storage.hpp
+benchmark-recovery: build/graph_recovery_bench
+	./scripts/run_graph_recovery_bench.sh
+
+build/graph_storage_test: tests/graph_storage_test.cpp include/graph_storage.hpp include/graph_recovery.hpp
 	mkdir -p build
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
 
 build/graph_storage_bench: benchmarks/graph_storage_bench.cpp include/graph_storage.hpp
+	mkdir -p build
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+build/graph_recovery_bench: benchmarks/graph_recovery_bench.cpp include/graph_recovery.hpp include/graph_storage.hpp
 	mkdir -p build
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
 

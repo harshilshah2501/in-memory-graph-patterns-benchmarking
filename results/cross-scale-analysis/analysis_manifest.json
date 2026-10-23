@@ -1,0 +1,46 @@
+{
+  "analysis_schema_version": "1",
+  "scales": [
+    5000000,
+    10000000,
+    20000000
+  ],
+  "runs": [
+    {
+      "run_id": "20261022-055327",
+      "run_count": 27,
+      "artifact_path": "artifacts/phase2-5m/20261022-055327"
+    },
+    {
+      "run_id": "20261022-061838",
+      "run_count": 27,
+      "artifact_path": "artifacts/phase2-10m/20261022-061838"
+    },
+    {
+      "run_id": "20261022-070740",
+      "run_count": 27,
+      "artifact_path": "artifacts/phase2-20m/20261022-070740"
+    }
+  ],
+  "candidate_rows": 243,
+  "condition_summary_rows": 81,
+  "balanced_summary_rows": 9,
+  "scaling_ratio_rows": 1026,
+  "scaling_overview_rows": 114,
+  "candidate_comparison_rows": 102,
+  "validation": "passed",
+  "files": [
+    "cross_scale_report.md",
+    "condition_summary.csv",
+    "balanced_scale_summary.csv",
+    "matched_scaling_ratios.csv",
+    "scaling_overview.csv",
+    "candidate_comparisons.csv",
+    "seed_variability.csv"
+  ],
+  "limits": [
+    "Three fixed seeds; descriptive variability only.",
+    "Synthetic workload fixtures only.",
+    "Recovery not measured; no universal recommendation."
+  ]
+}

@@ -1,0 +1,191 @@
+{
+  "matrix_schema_version": "1",
+  "run_count": 27,
+  "validated_raw_rows": 324,
+  "candidates": [
+    "bidirectional_hash",
+    "csr_csc",
+    "forward_hash"
+  ],
+  "cache_states": [
+    "best-effort-file-advice",
+    "warm-process-restart"
+  ],
+  "operations": [
+    "snapshot-load",
+    "source-rebuild"
+  ],
+  "workloads": [
+    {
+      "edges": 5000000,
+      "distribution": "clustered",
+      "seed": 20261021
+    },
+    {
+      "edges": 5000000,
+      "distribution": "clustered",
+      "seed": 20261022
+    },
+    {
+      "edges": 5000000,
+      "distribution": "clustered",
+      "seed": 20261023
+    },
+    {
+      "edges": 5000000,
+      "distribution": "hub",
+      "seed": 20261021
+    },
+    {
+      "edges": 5000000,
+      "distribution": "hub",
+      "seed": 20261022
+    },
+    {
+      "edges": 5000000,
+      "distribution": "hub",
+      "seed": 20261023
+    },
+    {
+      "edges": 5000000,
+      "distribution": "uniform",
+      "seed": 20261021
+    },
+    {
+      "edges": 5000000,
+      "distribution": "uniform",
+      "seed": 20261022
+    },
+    {
+      "edges": 5000000,
+      "distribution": "uniform",
+      "seed": 20261023
+    },
+    {
+      "edges": 10000000,
+      "distribution": "clustered",
+      "seed": 20261021
+    },
+    {
+      "edges": 10000000,
+      "distribution": "clustered",
+      "seed": 20261022
+    },
+    {
+      "edges": 10000000,
+      "distribution": "clustered",
+      "seed": 20261023
+    },
+    {
+      "edges": 10000000,
+      "distribution": "hub",
+      "seed": 20261021
+    },
+    {
+      "edges": 10000000,
+      "distribution": "hub",
+      "seed": 20261022
+    },
+    {
+      "edges": 10000000,
+      "distribution": "hub",
+      "seed": 20261023
+    },
+    {
+      "edges": 10000000,
+      "distribution": "uniform",
+      "seed": 20261021
+    },
+    {
+      "edges": 10000000,
+      "distribution": "uniform",
+      "seed": 20261022
+    },
+    {
+      "edges": 10000000,
+      "distribution": "uniform",
+      "seed": 20261023
+    },
+    {
+      "edges": 20000000,
+      "distribution": "clustered",
+      "seed": 20261021
+    },
+    {
+      "edges": 20000000,
+      "distribution": "clustered",
+      "seed": 20261022
+    },
+    {
+      "edges": 20000000,
+      "distribution": "clustered",
+      "seed": 20261023
+    },
+    {
+      "edges": 20000000,
+      "distribution": "hub",
+      "seed": 20261021
+    },
+    {
+      "edges": 20000000,
+      "distribution": "hub",
+      "seed": 20261022
+    },
+    {
+      "edges": 20000000,
+      "distribution": "hub",
+      "seed": 20261023
+    },
+    {
+      "edges": 20000000,
+      "distribution": "uniform",
+      "seed": 20261021
+    },
+    {
+      "edges": 20000000,
+      "distribution": "uniform",
+      "seed": 20261022
+    },
+    {
+      "edges": 20000000,
+      "distribution": "uniform",
+      "seed": 20261023
+    }
+  ],
+  "equivalence": "PASS",
+  "seed_variability": "Descriptive population standard deviation across available fixed seeds; not a confidence interval.",
+  "cache_limit": "best-effort POSIX_FADV_DONTNEED only; no guaranteed cold-cache or cold-host measurements.",
+  "run_ids": [
+    "20261022-100308230080689",
+    "20261022-100442760659243",
+    "20261022-100612751869918",
+    "20261022-100742711105395",
+    "20261022-100936616092439",
+    "20261022-101123711921893",
+    "20261022-101312557770351",
+    "20261022-101623103078897",
+    "20261022-101932145938308",
+    "20261022-102241135799516",
+    "20261022-102623646085362",
+    "20261022-103022631989464",
+    "20261022-090819940498994",
+    "20261022-090917371478936",
+    "20261022-091009242301940",
+    "20261022-091104831633642",
+    "20261022-091148202927014",
+    "20261022-091238155574782",
+    "20261022-091330087433376",
+    "20261022-091428626047242",
+    "20261022-091522880595181",
+    "20261022-092919601300386",
+    "20261022-093100331508985",
+    "20261022-093244932005244",
+    "20261022-093428554413931",
+    "20261022-093809703742552",
+    "20261022-094150294877581"
+  ],
+  "outputs": {
+    "matrix_results.csv": 105563,
+    "seed_summary.csv": 9481
+  }
+}

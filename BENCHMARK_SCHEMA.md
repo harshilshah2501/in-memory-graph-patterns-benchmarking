@@ -1,6 +1,6 @@
 # Benchmark CSV schema contract
 
-Schema version: **v1**
+Schema version: **v2**
 
 This document defines the machine-readable output contract for:
 
@@ -13,14 +13,14 @@ field first and branch parsing logic by version.
 
 ## Compatibility policy
 
-- `v1` column order is fixed and stable.
+- Each schema version's column order is fixed and stable.
 - New fields that would break position-based parsers must create a new schema
   version (`v2`, `v3`, ...).
 - Any semantic change to an existing field (units, definition, inclusion
   criteria) must bump schema version.
 - Optional or unavailable metrics are emitted as empty fields.
 
-## v1 columns (in order)
+## v2 columns (in order)
 
 1. `schema_version`
 2. `representation`
@@ -94,6 +94,7 @@ field first and branch parsing logic by version.
 70. `one_hop_reverse_checksum`
 71. `rca_forward_checksum`
 72. `rca_reverse_checksum`
+73. `warmups`
 
 ## Units and semantics
 
@@ -103,9 +104,27 @@ field first and branch parsing logic by version.
 - `*_qps_*`: queries per second
 - `retained_*`: estimated steady-state index memory, not process RSS
 - `*_checksum`: deterministic aggregate checks used for parity/correctness gates
+- `warmups`: number of untimed iterations run before each reported metric
 
 ## Missing values
 
 Missing fields are expected for representations that do not support a metric.
-For example, `forward_hash` has no reverse one-hop scan in `v1`, so reverse
+For example, `forward_hash` has no reverse one-hop scan, so reverse
 one-hop fields are empty.
+
+## Matrix output
+
+`run_benchmark_matrix.sh` preserves the benchmark columns and appends:
+
+- `peak_rss_kb`: candidate-isolated maximum resident set size from `/usr/bin/time`
+- `rss_elapsed_seconds`: wall-clock duration of the isolated run, in seconds
+- `rss_exit_code`: exit status of that run
+- `matrix_run_id`: identifier linking the row to its matrix run
+
+Each matrix run also writes `manifest.json` (manifest schema version `1`) with
+the benchmark CSV schema version, workload settings, tool paths, and relative
+paths to the consolidated CSV, per-seed summary, metadata, and raw files.
+`seed_summary.csv` groups comparable rows by representation and workload
+settings and reports the mean and population standard deviation of numeric
+metrics across distinct seeds. Checksums and exit codes are excluded from
+numeric aggregation.

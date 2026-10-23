@@ -1,12 +1,16 @@
 #include "graph_storage.hpp"
+#include "graph_recovery.hpp"
 
 #include <algorithm>
 #include <iostream>
 #include <memory>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <vector>
 
 using graph_storage::CsrCscGraph;
+using graph_storage::DurableEdgeSource;
 using graph_storage::Edge;
 using graph_storage::BidirectionalHashGraph;
 using graph_storage::ForwardHashGraph;
@@ -140,6 +144,179 @@ void test_atomic_snapshot_publication() {
             "old snapshot unexpectedly sees the new graph");
 }
 
+void test_durable_source_and_snapshot_round_trip() {
+    const auto base = std::filesystem::temp_directory_path() /
+                      "graph_storage_recovery_test";
+    const auto source_path = (base.string() + "_edges.bin");
+    const auto snapshot_path = (base.string() + "_snapshot.bin");
+    const auto forward_snapshot_path = (base.string() + "_forward.snapshot");
+    const auto bidirectional_snapshot_path =
+        (base.string() + "_bidirectional.snapshot");
+    const std::vector<Edge> edges = {
+        {0, 2, 3}, {0, 1, 1}, {2, 0, 2}, {0, 1, 1}, {3, 1, 1}};
+    const CsrCscGraph expected = CsrCscGraph::build(4, edges);
+
+    DurableEdgeSource::write(source_path, 4, edges);
+    std::size_t loaded_vertices = 0;
+    const auto loaded_edges =
+        DurableEdgeSource::read(source_path, 4, edges.size(), loaded_vertices);
+    require(loaded_vertices == 4, "durable source vertex count mismatch");
+    require(loaded_edges.size() == edges.size(),
+            "durable source edge count mismatch");
+    for (std::size_t index = 0; index < edges.size(); ++index) {
+        require(loaded_edges[index].source == edges[index].source &&
+                    loaded_edges[index].target == edges[index].target &&
+                    loaded_edges[index].type == edges[index].type,
+                "durable source edge mismatch");
+    }
+
+    expected.save_snapshot(snapshot_path);
+    const CsrCscGraph restored =
+        CsrCscGraph::load_snapshot(snapshot_path, 4, edges.size());
+    require(restored.vertex_count() == expected.vertex_count(),
+            "snapshot vertex count mismatch");
+    require(restored.edge_count() == expected.edge_count(),
+            "snapshot edge count mismatch");
+    for (graph_storage::Vertex vertex = 0; vertex < 4; ++vertex) {
+        const auto expected_out = expected.out_neighbors(vertex);
+        const auto restored_out = restored.out_neighbors(vertex);
+        require(std::equal(expected_out.begin(), expected_out.end(),
+                           restored_out.begin(), restored_out.end()),
+                "snapshot outgoing adjacency mismatch");
+        const auto expected_in = expected.in_neighbors(vertex);
+        const auto restored_in = restored.in_neighbors(vertex);
+        require(std::equal(expected_in.begin(), expected_in.end(),
+                           restored_in.begin(), restored_in.end()),
+                "snapshot incoming adjacency mismatch");
+    }
+
+    const ForwardHashGraph forward = ForwardHashGraph::build(4, edges);
+    forward.save_snapshot(forward_snapshot_path);
+    const ForwardHashGraph restored_forward =
+        ForwardHashGraph::load_snapshot(forward_snapshot_path, 4, edges.size());
+    require(restored_forward.edge_count() == edges.size(),
+            "forward-hash snapshot edge count mismatch");
+    for (graph_storage::Vertex vertex = 0; vertex < 4; ++vertex) {
+        require(forward.out_neighbors(vertex) ==
+                    restored_forward.out_neighbors(vertex),
+                "forward-hash snapshot adjacency mismatch");
+    }
+
+    const BidirectionalHashGraph bidirectional =
+        BidirectionalHashGraph::build(4, edges);
+    bidirectional.save_snapshot(bidirectional_snapshot_path);
+    const BidirectionalHashGraph restored_bidirectional =
+        BidirectionalHashGraph::load_snapshot(bidirectional_snapshot_path, 4,
+                                              edges.size());
+    require(restored_bidirectional.edge_count() == edges.size(),
+            "bidirectional-hash snapshot edge count mismatch");
+    for (graph_storage::Vertex vertex = 0; vertex < 4; ++vertex) {
+        require(bidirectional.out_neighbors(vertex) ==
+                    restored_bidirectional.out_neighbors(vertex),
+                "bidirectional-hash snapshot outgoing adjacency mismatch");
+        require(bidirectional.in_neighbors(vertex) ==
+                    restored_bidirectional.in_neighbors(vertex),
+                "bidirectional-hash snapshot incoming adjacency mismatch");
+    }
+    bool rejected_hash_limits = false;
+    try {
+        (void)ForwardHashGraph::load_snapshot(forward_snapshot_path, 3,
+                                              edges.size());
+    } catch (const std::runtime_error&) {
+        rejected_hash_limits = true;
+    }
+    require(rejected_hash_limits,
+            "hash snapshot loader ignored configured vertex limit");
+    bool rejected_hash_edge_limit = false;
+    try {
+        (void)ForwardHashGraph::load_snapshot(forward_snapshot_path, 4,
+                                              edges.size() - 1);
+    } catch (const std::runtime_error&) {
+        rejected_hash_edge_limit = true;
+    }
+    require(rejected_hash_edge_limit,
+            "hash snapshot loader ignored configured edge limit");
+    {
+        std::fstream snapshot(forward_snapshot_path,
+                              std::ios::binary | std::ios::in | std::ios::out);
+        snapshot.seekp(-1, std::ios::end);
+        const char byte = '\x7f';
+        snapshot.write(&byte, 1);
+    }
+    bool rejected_hash_corruption = false;
+    try {
+        (void)ForwardHashGraph::load_snapshot(forward_snapshot_path, 4,
+                                              edges.size());
+    } catch (const std::runtime_error&) {
+        rejected_hash_corruption = true;
+    }
+    require(rejected_hash_corruption,
+            "hash snapshot loader accepted checksum corruption");
+
+    bool rejected_limits = false;
+    try {
+        (void)CsrCscGraph::load_snapshot(snapshot_path, 3, edges.size());
+    } catch (const std::runtime_error&) {
+        rejected_limits = true;
+    }
+    require(rejected_limits, "snapshot loader ignored configured size limits");
+    bool rejected_edge_limit = false;
+    try {
+        (void)CsrCscGraph::load_snapshot(snapshot_path, 4, edges.size() - 1);
+    } catch (const std::runtime_error&) {
+        rejected_edge_limit = true;
+    }
+    require(rejected_edge_limit, "snapshot loader ignored edge-count limit");
+
+    {
+        std::fstream snapshot(snapshot_path,
+                              std::ios::binary | std::ios::in | std::ios::out);
+        snapshot.seekp(-1, std::ios::end);
+        const char byte = '\x7f';
+        snapshot.write(&byte, 1);
+    }
+    bool rejected_corruption = false;
+    try {
+        (void)CsrCscGraph::load_snapshot(snapshot_path, 4, edges.size());
+    } catch (const std::runtime_error&) {
+        rejected_corruption = true;
+    }
+    require(rejected_corruption, "snapshot loader accepted checksum corruption");
+
+    DurableEdgeSource::write(source_path, 4, edges);
+    {
+        std::fstream source(source_path,
+                            std::ios::binary | std::ios::in | std::ios::out);
+        source.seekp(-1, std::ios::end);
+        const char byte = '\x7f';
+        source.write(&byte, 1);
+    }
+    bool rejected_source_corruption = false;
+    try {
+        (void)DurableEdgeSource::read(source_path, 4, edges.size(),
+                                      loaded_vertices);
+    } catch (const std::runtime_error&) {
+        rejected_source_corruption = true;
+    }
+    require(rejected_source_corruption,
+            "durable source loader accepted checksum corruption");
+    DurableEdgeSource::write(source_path, 4, edges);
+    bool rejected_source_limit = false;
+    try {
+        (void)DurableEdgeSource::read(source_path, 4, edges.size() - 1,
+                                      loaded_vertices);
+    } catch (const std::runtime_error&) {
+        rejected_source_limit = true;
+    }
+    require(rejected_source_limit,
+            "durable source loader ignored edge-count limit");
+
+    std::filesystem::remove(source_path);
+    std::filesystem::remove(snapshot_path);
+    std::filesystem::remove(forward_snapshot_path);
+    std::filesystem::remove(bidirectional_snapshot_path);
+}
+
 }  // namespace
 
 int main() {
@@ -150,6 +327,7 @@ int main() {
         test_bidirectional_hash_matches_csr();
         test_invalid_vertices_are_rejected();
         test_atomic_snapshot_publication();
+        test_durable_source_and_snapshot_round_trip();
         std::cout << "All graph storage tests passed.\n";
     } catch (const std::exception& error) {
         std::cerr << "Test failure: " << error.what() << '\n';

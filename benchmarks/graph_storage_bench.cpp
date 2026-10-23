@@ -24,13 +24,14 @@ using graph_storage::Vertex;
 namespace {
 
 constexpr std::size_t kMaxSupportedEdges = 40000000;
-constexpr const char* kCsvSchemaVersion = "v1";
+constexpr const char* kCsvSchemaVersion = "v2";
 
 struct Options {
     std::size_t vertices = 50000;
     std::size_t edges = 400000;
     std::size_t queries = 1000;
     int trials = 5;
+    int warmups = 0;
     std::size_t hops = 3;
     std::uint32_t seed = 20261021;
     std::string distribution = "uniform";
@@ -161,9 +162,12 @@ DistributionStats summarize_samples(std::vector<double> samples) {
 }
 
 template <typename Function>
-DistributionStats measure_ms_samples(int trials, Function function) {
+DistributionStats measure_ms_samples(int trials, int warmups, Function function) {
     std::vector<double> samples;
     samples.reserve(static_cast<std::size_t>(trials));
+    for (int warmup = 0; warmup < warmups; ++warmup) {
+        function();
+    }
     for (int trial = 0; trial < trials; ++trial) {
         const auto start = std::chrono::steady_clock::now();
         function();
@@ -175,9 +179,13 @@ DistributionStats measure_ms_samples(int trials, Function function) {
 }
 
 template <typename Graph, typename Builder>
-DistributionStats measure_build_ms_samples(int trials, Builder builder) {
+DistributionStats measure_build_ms_samples(int trials, int warmups, Builder builder) {
     std::vector<double> samples;
     samples.reserve(static_cast<std::size_t>(trials));
+    for (int warmup = 0; warmup < warmups; ++warmup) {
+        Graph graph = builder();
+        (void)graph;
+    }
     for (int trial = 0; trial < trials; ++trial) {
         const auto start = std::chrono::steady_clock::now();
         {
@@ -202,6 +210,7 @@ Options parse_options(int argc, char** argv) {
                 << "  --edges N          Edge count (default 400000, max 40000000)\n"
                 << "  --queries N        Query count (default 1000)\n"
                 << "  --trials N         Repeated timing trials (default 5)\n"
+                << "  --warmups N        Untimed warmup iterations per metric (default 0)\n"
                 << "  --hops N           Maximum RCA traversal depth (default 3)\n"
                 << "  --seed N           Dataset seed (default 20261021)\n"
                 << "  --distribution D   uniform, hub, or clustered\n"
@@ -226,6 +235,12 @@ Options parse_options(int argc, char** argv) {
                 throw std::invalid_argument("--trials is too large");
             }
             options.trials = static_cast<int>(parsed);
+        } else if (arg == "--warmups") {
+            const std::size_t parsed = parse_size(value, "--warmups");
+            if (parsed > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+                throw std::invalid_argument("--warmups is too large");
+            }
+            options.warmups = static_cast<int>(parsed);
         } else if (arg == "--hops") {
             options.hops = parse_size(value, "--hops");
         } else if (arg == "--seed") {
@@ -254,6 +269,9 @@ Options parse_options(int argc, char** argv) {
         options.hops == 0) {
         throw std::invalid_argument(
             "--edges, --queries, --trials, and --hops must be positive");
+    }
+    if (options.warmups > std::numeric_limits<int>::max() - options.trials) {
+        throw std::invalid_argument("--warmups plus --trials is too large");
     }
     if (options.edges > kMaxSupportedEdges) {
         throw std::invalid_argument(
@@ -390,7 +408,8 @@ TraversalStats benchmark_traversal(const Graph& graph,
                                    const std::vector<Vertex>& seeds,
                                    std::size_t max_hops,
                                    NeighborsFor neighbors_for,
-                                   int trials) {
+                                   int trials,
+                                   int warmups) {
     std::vector<double> latencies_us;
     latencies_us.reserve(seeds.size() * static_cast<std::size_t>(trials));
     std::vector<std::uint32_t> visited(graph.vertex_count(), 0);
@@ -399,22 +418,33 @@ TraversalStats benchmark_traversal(const Graph& graph,
     std::uint32_t mark = 0;
     std::uint64_t aggregate_checksum = 0;
 
-    for (int trial = 0; trial < trials; ++trial) {
+    const auto run_seed_pass = [&](bool record) {
         for (Vertex seed : seeds) {
             if (mark == std::numeric_limits<std::uint32_t>::max()) {
                 std::fill(visited.begin(), visited.end(), 0);
                 mark = 0;
             }
             ++mark;
-            const auto start = std::chrono::steady_clock::now();
+            const auto start =
+                record ? std::chrono::steady_clock::now()
+                       : std::chrono::steady_clock::time_point{};
             const TraversalResult result =
                 traverse(graph, seed, max_hops, neighbors_for, visited, queue,
                          mark);
-            const auto finish = std::chrono::steady_clock::now();
-            latencies_us.push_back(
-                std::chrono::duration<double, std::micro>(finish - start).count());
-            aggregate_checksum += result.checksum + result.reached;
+            if (record) {
+                const auto finish = std::chrono::steady_clock::now();
+                latencies_us.push_back(std::chrono::duration<double, std::micro>(
+                                           finish - start)
+                                           .count());
+                aggregate_checksum += result.checksum + result.reached;
+            }
         }
+    };
+    for (int warmup = 0; warmup < warmups; ++warmup) {
+        run_seed_pass(false);
+    }
+    for (int trial = 0; trial < trials; ++trial) {
+        run_seed_pass(true);
     }
 
     return TraversalStats{summarize_samples(std::move(latencies_us)),
@@ -448,10 +478,15 @@ std::uint64_t scan_in_neighbors(const Graph& graph,
 }
 
 template <typename Function>
-ChecksumSamples benchmark_checksum_samples(int trials, Function function) {
+ChecksumSamples benchmark_checksum_samples(int trials,
+                                           int warmups,
+                                           Function function) {
     std::vector<double> latencies_ms;
     latencies_ms.reserve(static_cast<std::size_t>(trials));
     std::uint64_t checksum = 0;
+    for (int warmup = 0; warmup < warmups; ++warmup) {
+        function();
+    }
     for (int trial = 0; trial < trials; ++trial) {
         const auto start = std::chrono::steady_clock::now();
         checksum = function();
@@ -496,14 +531,16 @@ double queries_per_second_from_us(double microseconds_per_query) {
 void profile_forward_hash_phases(CandidateReport& report,
                                  std::size_t vertex_count,
                                  const std::vector<Edge>& edges,
-                                 int trials) {
+                                 int trials,
+                                 int warmups) {
     std::vector<double> init_samples;
     std::vector<double> fill_samples;
     init_samples.reserve(static_cast<std::size_t>(trials));
     fill_samples.reserve(static_cast<std::size_t>(trials));
     std::uint64_t guard = 0;
 
-    for (int trial = 0; trial < trials; ++trial) {
+    for (int trial = 0; trial < warmups + trials; ++trial) {
+        const bool record = trial >= warmups;
         std::unordered_map<Vertex, std::vector<graph_storage::Neighbor>> outgoing;
 
         const auto init_start = std::chrono::steady_clock::now();
@@ -513,9 +550,11 @@ void profile_forward_hash_phases(CandidateReport& report,
                              std::vector<graph_storage::Neighbor>{});
         }
         const auto init_end = std::chrono::steady_clock::now();
-        init_samples.push_back(
-            std::chrono::duration<double, std::milli>(init_end - init_start)
-                .count());
+        if (record) {
+            init_samples.push_back(
+                std::chrono::duration<double, std::milli>(init_end - init_start)
+                    .count());
+        }
 
         const auto fill_start = std::chrono::steady_clock::now();
         for (const Edge& edge : edges) {
@@ -526,9 +565,11 @@ void profile_forward_hash_phases(CandidateReport& report,
                 graph_storage::Neighbor{edge.target, edge.type});
         }
         const auto fill_end = std::chrono::steady_clock::now();
-        fill_samples.push_back(
-            std::chrono::duration<double, std::milli>(fill_end - fill_start)
-                .count());
+        if (record) {
+            fill_samples.push_back(
+                std::chrono::duration<double, std::milli>(fill_end - fill_start)
+                    .count());
+        }
         guard += outgoing.size();
     }
 
@@ -544,7 +585,8 @@ void profile_forward_hash_phases(CandidateReport& report,
 void profile_bidirectional_hash_phases(CandidateReport& report,
                                        std::size_t vertex_count,
                                        const std::vector<Edge>& edges,
-                                       int trials) {
+                                       int trials,
+                                       int warmups) {
     std::vector<double> init_samples;
     std::vector<double> degree_samples;
     std::vector<double> reserve_samples;
@@ -555,7 +597,8 @@ void profile_bidirectional_hash_phases(CandidateReport& report,
     fill_samples.reserve(static_cast<std::size_t>(trials));
     std::uint64_t guard = 0;
 
-    for (int trial = 0; trial < trials; ++trial) {
+    for (int trial = 0; trial < warmups + trials; ++trial) {
+        const bool record = trial >= warmups;
         std::unordered_map<Vertex, std::vector<graph_storage::Neighbor>> outgoing;
         std::unordered_map<Vertex, std::vector<graph_storage::Neighbor>> incoming;
 
@@ -568,9 +611,11 @@ void profile_bidirectional_hash_phases(CandidateReport& report,
             incoming.emplace(vertex, std::vector<graph_storage::Neighbor>{});
         }
         const auto init_end = std::chrono::steady_clock::now();
-        init_samples.push_back(
-            std::chrono::duration<double, std::milli>(init_end - init_start)
-                .count());
+        if (record) {
+            init_samples.push_back(
+                std::chrono::duration<double, std::milli>(init_end - init_start)
+                    .count());
+        }
 
         const auto degree_start = std::chrono::steady_clock::now();
         std::vector<std::size_t> out_degree(vertex_count, 0);
@@ -583,9 +628,11 @@ void profile_bidirectional_hash_phases(CandidateReport& report,
             ++in_degree[edge.target];
         }
         const auto degree_end = std::chrono::steady_clock::now();
-        degree_samples.push_back(
-            std::chrono::duration<double, std::milli>(degree_end - degree_start)
-                .count());
+        if (record) {
+            degree_samples.push_back(
+                std::chrono::duration<double, std::milli>(degree_end - degree_start)
+                    .count());
+        }
 
         const auto reserve_start = std::chrono::steady_clock::now();
         for (std::size_t id = 0; id < vertex_count; ++id) {
@@ -593,9 +640,11 @@ void profile_bidirectional_hash_phases(CandidateReport& report,
             incoming.at(static_cast<Vertex>(id)).reserve(in_degree[id]);
         }
         const auto reserve_end = std::chrono::steady_clock::now();
-        reserve_samples.push_back(
-            std::chrono::duration<double, std::milli>(reserve_end - reserve_start)
-                .count());
+        if (record) {
+            reserve_samples.push_back(
+                std::chrono::duration<double, std::milli>(reserve_end - reserve_start)
+                    .count());
+        }
 
         const auto fill_start = std::chrono::steady_clock::now();
         for (const Edge& edge : edges) {
@@ -605,9 +654,11 @@ void profile_bidirectional_hash_phases(CandidateReport& report,
                 graph_storage::Neighbor{edge.source, edge.type});
         }
         const auto fill_end = std::chrono::steady_clock::now();
-        fill_samples.push_back(
-            std::chrono::duration<double, std::milli>(fill_end - fill_start)
-                .count());
+        if (record) {
+            fill_samples.push_back(
+                std::chrono::duration<double, std::milli>(fill_end - fill_start)
+                    .count());
+        }
         guard += outgoing.size() + incoming.size();
     }
 
@@ -627,7 +678,8 @@ void profile_bidirectional_hash_phases(CandidateReport& report,
 void profile_csr_csc_phases(CandidateReport& report,
                             std::size_t vertex_count,
                             const std::vector<Edge>& edges,
-                            int trials) {
+                            int trials,
+                            int warmups) {
     std::vector<double> degree_samples;
     std::vector<double> prefix_samples;
     std::vector<double> fill_samples;
@@ -638,7 +690,8 @@ void profile_csr_csc_phases(CandidateReport& report,
     sort_samples.reserve(static_cast<std::size_t>(trials));
     std::uint64_t guard = 0;
 
-    for (int trial = 0; trial < trials; ++trial) {
+    for (int trial = 0; trial < warmups + trials; ++trial) {
+        const bool record = trial >= warmups;
         std::vector<std::size_t> out_offsets(vertex_count + 1, 0);
         std::vector<std::size_t> in_offsets(vertex_count + 1, 0);
 
@@ -651,9 +704,11 @@ void profile_csr_csc_phases(CandidateReport& report,
             ++in_offsets[static_cast<std::size_t>(edge.target) + 1];
         }
         const auto degree_end = std::chrono::steady_clock::now();
-        degree_samples.push_back(
-            std::chrono::duration<double, std::milli>(degree_end - degree_start)
-                .count());
+        if (record) {
+            degree_samples.push_back(
+                std::chrono::duration<double, std::milli>(degree_end - degree_start)
+                    .count());
+        }
 
         const auto prefix_start = std::chrono::steady_clock::now();
         for (std::size_t index = 1; index < out_offsets.size(); ++index) {
@@ -661,9 +716,11 @@ void profile_csr_csc_phases(CandidateReport& report,
             in_offsets[index] += in_offsets[index - 1];
         }
         const auto prefix_end = std::chrono::steady_clock::now();
-        prefix_samples.push_back(
-            std::chrono::duration<double, std::milli>(prefix_end - prefix_start)
-                .count());
+        if (record) {
+            prefix_samples.push_back(
+                std::chrono::duration<double, std::milli>(prefix_end - prefix_start)
+                    .count());
+        }
 
         const auto fill_start = std::chrono::steady_clock::now();
         std::vector<graph_storage::Neighbor> out_neighbors(edges.size());
@@ -679,9 +736,11 @@ void profile_csr_csc_phases(CandidateReport& report,
                 graph_storage::Neighbor{edge.source, edge.type};
         }
         const auto fill_end = std::chrono::steady_clock::now();
-        fill_samples.push_back(
-            std::chrono::duration<double, std::milli>(fill_end - fill_start)
-                .count());
+        if (record) {
+            fill_samples.push_back(
+                std::chrono::duration<double, std::milli>(fill_end - fill_start)
+                    .count());
+        }
 
         const auto sort_start = std::chrono::steady_clock::now();
         const auto neighbor_order = [](const graph_storage::Neighbor& left,
@@ -700,9 +759,11 @@ void profile_csr_csc_phases(CandidateReport& report,
                       neighbor_order);
         }
         const auto sort_end = std::chrono::steady_clock::now();
-        sort_samples.push_back(
-            std::chrono::duration<double, std::milli>(sort_end - sort_start)
-                .count());
+        if (record) {
+            sort_samples.push_back(
+                std::chrono::duration<double, std::milli>(sort_end - sort_start)
+                    .count());
+        }
         guard += out_neighbors.size() + in_neighbors.size();
     }
 
@@ -809,6 +870,7 @@ void print_text_report(const Options& options,
               << ", distribution=" << options.distribution
               << ", seed=" << options.seed << ", queries=" << options.queries
               << ", hops=" << options.hops << ", trials=" << options.trials
+              << ", warmups=" << options.warmups
               << '\n';
     std::cout << "Configured edge cap: " << kMaxSupportedEdges << "\n\n";
     std::cout << "CSV schema version: " << kCsvSchemaVersion << "\n\n";
@@ -861,7 +923,7 @@ void print_csv_header() {
         << "phase_fill_edges_p50_ms,phase_sort_ranges_p50_ms,"
         << "retained_index_bytes_est,retained_bytes_per_edge_est,"
         << "retained_bytes_per_vertex_est,one_hop_forward_checksum,"
-        << "one_hop_reverse_checksum,rca_forward_checksum,rca_reverse_checksum\n";
+        << "one_hop_reverse_checksum,rca_forward_checksum,rca_reverse_checksum,warmups\n";
 }
 
 void print_csv_row(const Options& options, const CandidateReport& report) {
@@ -871,7 +933,7 @@ void print_csv_row(const Options& options, const CandidateReport& report) {
                   << stats.cv_percent << ',' << stats.warm_delta_percent << ','
                   << stats.max;
     };
-    auto write_empty_stats = []() { std::cout << ",,,,,,,,,"; };
+    auto write_empty_stats = []() { std::cout << ",,,,,,,,"; };
 
     std::cout << kCsvSchemaVersion << ',' << report.representation << ','
               << options.edges << ','
@@ -941,7 +1003,7 @@ void print_csv_row(const Options& options, const CandidateReport& report) {
     if (report.has_reverse_rca) {
         std::cout << report.rca_reverse.reached_checksum;
     }
-    std::cout << '\n';
+    std::cout << ',' << options.warmups << '\n';
 }
 
 }  // namespace
@@ -963,18 +1025,19 @@ int main(int argc, char** argv) {
             forward_hash.vertex_count = options.vertices;
             forward_hash.edge_count = options.edges;
             forward_hash.build_ms =
-                measure_build_ms_samples<ForwardHashGraph>(options.trials, [&] {
+                measure_build_ms_samples<ForwardHashGraph>(
+                    options.trials, options.warmups, [&] {
                     return ForwardHashGraph::build(options.vertices, edges);
                 });
             profile_forward_hash_phases(forward_hash, options.vertices, edges,
-                                        options.trials);
+                                        options.trials, options.warmups);
             {
                 const ForwardHashGraph graph =
                     ForwardHashGraph::build(options.vertices, edges);
                 forward_hash.retained_index_bytes_est =
                     graph.retained_index_bytes_estimate();
                 const ChecksumSamples one_hop =
-                    benchmark_checksum_samples(options.trials, [&] {
+                    benchmark_checksum_samples(options.trials, options.warmups, [&] {
                         return scan_out_neighbors(graph, queries);
                     });
                 forward_hash.one_hop_forward_ms = one_hop.latency;
@@ -984,7 +1047,7 @@ int main(int argc, char** argv) {
                     [](const ForwardHashGraph& current_graph, Vertex vertex) {
                         return current_graph.out_neighbors(vertex);
                     },
-                    options.trials);
+                    options.trials, options.warmups);
             }
             forward_hash.build_edges_per_sec_p50 =
                 edges_per_second_from_ms(options.edges, forward_hash.build_ms.p50);
@@ -1003,24 +1066,24 @@ int main(int argc, char** argv) {
             bidirectional_hash.has_reverse_rca = true;
             bidirectional_hash.build_ms =
                 measure_build_ms_samples<BidirectionalHashGraph>(
-                    options.trials, [&] {
+                    options.trials, options.warmups, [&] {
                         return BidirectionalHashGraph::build(options.vertices, edges);
                     });
             profile_bidirectional_hash_phases(bidirectional_hash, options.vertices,
-                                              edges, options.trials);
+                                              edges, options.trials, options.warmups);
             {
                 const BidirectionalHashGraph graph =
                     BidirectionalHashGraph::build(options.vertices, edges);
                 bidirectional_hash.retained_index_bytes_est =
                     graph.retained_index_bytes_estimate();
                 const ChecksumSamples one_hop_out =
-                    benchmark_checksum_samples(options.trials, [&] {
+                    benchmark_checksum_samples(options.trials, options.warmups, [&] {
                         return scan_out_neighbors(graph, queries);
                     });
                 bidirectional_hash.one_hop_forward_ms = one_hop_out.latency;
                 bidirectional_hash.one_hop_forward_checksum = one_hop_out.checksum;
                 const ChecksumSamples one_hop_in =
-                    benchmark_checksum_samples(options.trials, [&] {
+                    benchmark_checksum_samples(options.trials, options.warmups, [&] {
                         return scan_in_neighbors(graph, queries);
                     });
                 bidirectional_hash.one_hop_reverse_ms = one_hop_in.latency;
@@ -1030,13 +1093,13 @@ int main(int argc, char** argv) {
                     [](const BidirectionalHashGraph& current_graph, Vertex vertex) {
                         return current_graph.out_neighbors(vertex);
                     },
-                    options.trials);
+                    options.trials, options.warmups);
                 bidirectional_hash.rca_reverse = benchmark_traversal(
                     graph, queries, options.hops,
                     [](const BidirectionalHashGraph& current_graph, Vertex vertex) {
                         return current_graph.in_neighbors(vertex);
                     },
-                    options.trials);
+                    options.trials, options.warmups);
             }
             bidirectional_hash.build_edges_per_sec_p50 = edges_per_second_from_ms(
                 options.edges, bidirectional_hash.build_ms.p50);
@@ -1061,22 +1124,24 @@ int main(int argc, char** argv) {
             csr.edge_count = options.edges;
             csr.has_reverse_metrics = true;
             csr.has_reverse_rca = true;
-            csr.build_ms = measure_build_ms_samples<CsrCscGraph>(options.trials, [&] {
-                return CsrCscGraph::build(options.vertices, edges);
-            });
-            profile_csr_csc_phases(csr, options.vertices, edges, options.trials);
+            csr.build_ms = measure_build_ms_samples<CsrCscGraph>(
+                options.trials, options.warmups, [&] {
+                    return CsrCscGraph::build(options.vertices, edges);
+                });
+            profile_csr_csc_phases(csr, options.vertices, edges, options.trials,
+                                   options.warmups);
             {
                 const CsrCscGraph graph =
                     CsrCscGraph::build(options.vertices, edges);
                 csr.retained_index_bytes_est = graph.retained_index_bytes_estimate();
                 const ChecksumSamples one_hop_out =
-                    benchmark_checksum_samples(options.trials, [&] {
+                    benchmark_checksum_samples(options.trials, options.warmups, [&] {
                         return scan_out_neighbors(graph, queries);
                     });
                 csr.one_hop_forward_ms = one_hop_out.latency;
                 csr.one_hop_forward_checksum = one_hop_out.checksum;
                 const ChecksumSamples one_hop_in =
-                    benchmark_checksum_samples(options.trials, [&] {
+                    benchmark_checksum_samples(options.trials, options.warmups, [&] {
                         return scan_in_neighbors(graph, queries);
                     });
                 csr.one_hop_reverse_ms = one_hop_in.latency;
@@ -1086,13 +1151,13 @@ int main(int argc, char** argv) {
                     [](const CsrCscGraph& current_graph, Vertex vertex) {
                         return current_graph.out_neighbors(vertex);
                     },
-                    options.trials);
+                    options.trials, options.warmups);
                 csr.rca_reverse = benchmark_traversal(
                     graph, queries, options.hops,
                     [](const CsrCscGraph& current_graph, Vertex vertex) {
                         return current_graph.in_neighbors(vertex);
                     },
-                    options.trials);
+                    options.trials, options.warmups);
             }
             csr.build_edges_per_sec_p50 =
                 edges_per_second_from_ms(options.edges, csr.build_ms.p50);
@@ -1152,6 +1217,7 @@ int main(int argc, char** argv) {
                           << ", queries=" << options.queries
                           << ", hops=" << options.hops
                           << ", trials=" << options.trials
+                          << ", warmups=" << options.warmups
                           << ", candidate=" << options.candidate << '\n';
                 std::cout << "Configured edge cap: " << kMaxSupportedEdges << '\n';
                 std::cout << "CSV schema version: " << kCsvSchemaVersion << "\n\n";

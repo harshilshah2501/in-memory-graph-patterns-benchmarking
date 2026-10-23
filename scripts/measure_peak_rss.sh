@@ -28,7 +28,20 @@ for candidate in "${CANDIDATES[@]}"; do
   set -e
 
   peak_rss_kb="$(awk -F: '/Maximum resident set size/ {gsub(/^[ \t]+/, "", $2); print $2}' "$stderr_file" | tail -n 1)"
-  elapsed="$(awk '/Elapsed \(wall clock\) time/ {print $NF}' "$stderr_file" | tail -n 1)"
+  elapsed="$(awk '
+    /Elapsed \(wall clock\) time/ {
+      value = $NF
+      count = split(value, part, ":")
+      if (count == 3) {
+        seconds = part[1] * 3600 + part[2] * 60 + part[3]
+      } else if (count == 2) {
+        seconds = part[1] * 60 + part[2]
+      } else {
+        seconds = part[1]
+      }
+      printf "%.2f\n", seconds
+    }
+  ' "$stderr_file" | tail -n 1)"
   if [[ -z "$peak_rss_kb" ]]; then
     peak_rss_kb=""
   fi
