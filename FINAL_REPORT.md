@@ -131,7 +131,7 @@ RCA p50 at 20M edges, in µs, by hop depth (uniform and hub shown; clustered is 
 | Hub | 4 | Fwd | 38,785 / 58,729 / 65,531 | **17,824 / 26,861 / 30,232** |
 | Hub | 4 | Rev | 35,336 / 54,187 / 60,362 | **18,358 / 28,213 / 32,115** |
 
-**Reading it:** CSR+CSC is faster at p50, p95 and p99 in every row, so its advantage is not only a median effect. The smallest tail gap is about 1.3× (uniform 2-hop reverse p99, and uniform 4-hop forward p99: 597 vs 449 µs); on clustered and hub graphs the p99 gap is about 2–3×. In this data the tails are moderate: p99 is about 1.7–5× p50 for both layouts. Percentiles are computed per run and then averaged over seeds, so these are not pooled across seeds.
+**Reading it:** CSR+CSC is faster at p50, p95 and p99 in every row, so its advantage is not only a median effect. The smallest tail gap is about 1.3× (uniform 2-hop reverse p99, and uniform 4-hop forward p99: 597 vs 449 µs); the p99 gap is about 2.8–3.1× on clustered 4-hop, 1.9–2.2× on hub 4-hop and about 1.4× on hub 2-hop. In this data the tails are moderate: p99 is about 1.5–4× p50 for both layouts. Percentiles are computed per run and then averaged over seeds, so these are not pooled across seeds.
 
 One-hop lookups (the same 500 start vertices, read once, no expansion) at 20M edges. Time in µs per batch of 500; this is a best-case, cache-warm lookup cost, so treat it as supporting evidence only:
 
