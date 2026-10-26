@@ -61,6 +61,19 @@ The **six decision metrics** (build, forward traversal, reverse traversal, retai
 | Diagnostic | **Cache state** | `warm-process-restart` is a new process with the OS page cache uncontrolled. `best-effort-file-advice` asks the OS to drop the file's cached pages before loading | Recovery after a restart is highly sensitive to the page cache | **Neither is a strict cold-host guarantee** |
 | Diagnostic | **Seed SD** | Population standard deviation of the per-seed means, across 3 seeds | Rough indicator of stability | Descriptive only, not a confidence interval |
 
+### Percentiles: p50, p95 and p99
+
+A percentile is a position in the sorted list of timing samples. **p50** (median): half the samples are faster, so it is the typical cost. **p95** and **p99**: 95% and 99% of samples are faster, so they describe the slow **tail** (1 in 20 and 1 in 100 operations are slower than this). A tail matters because a slow operation is what a user or caller waits on, and RCA traversals vary widely with where they start (a hub vertex fans out far more than an ordinary one).
+
+Which one to use depends on how many samples exist:
+
+| Metric | Samples per run | What is reported |
+|---|---|---|
+| Build, rebuild, snapshot load, one-hop | 3 (one per timed trial) | **p50 only.** With 3 samples p95 and p99 both equal the maximum, so they add nothing. The median of 3 also resists one noisy trial |
+| Forward and reverse traversal | 1,500 (500 queries × 3 trials) | **p50, p95 and p99.** The tail percentiles are real observations (§5.2) |
+
+The mean is not used as a headline for traversal because a few hub-driven slow queries pull it up.
+
 ## 4. Method
 
 - **Graphs:** synthetic, with three distributions. *Uniform* picks endpoints at random. *Hub* concentrates edges on a few very high-degree vertices. *Clustered* makes edges mostly local. There are 3 seeds, vertex count is edges ÷ 8, and each scale is regenerated.
@@ -102,6 +115,23 @@ RCA p50 at 20M edges, in µs, by hop depth (uniform and hub shown; clustered is 
 | Clustered | 4 | 271 | **90** | 239 | **89** |
 
 **Reading it:** CSR+CSC is about 1.3–3× faster than bidirectional hash in the rows shown, in both directions. The smallest gap is uniform 2-hop reverse (2.9 vs 2.3 µs, about 1.3×), where both are tiny. Across 27 matched seed/distribution/hop comparisons at 20M, CSR+CSC had lower forward p50 than bidirectional hash in 27 of 27 and lower reverse p50 in 26 of 27. Hub 4-hop queries are about 100× slower than uniform because the expansion reaches a large fraction of the graph.
+
+**Tail latency at 20M** (µs, mean over 3 seeds; each run's percentile is computed over its 1,500 samples). Format is p50 / p95 / p99:
+
+| Distribution | Hops | Direction | bidirectional_hash | csr_csc |
+|---|---|---|---|---|
+| Uniform | 2 | Fwd | 4.0 / 7.2 / 9.6 | **2.2 / 3.7 / 4.5** |
+| Uniform | 2 | Rev | 2.9 / 5.5 / 7.1 | **2.3 / 4.1 / 5.3** |
+| Uniform | 4 | Fwd | 251 / 468 / 597 | **111 / 233 / 449** |
+| Uniform | 4 | Rev | 271 / 484 / 630 | **125 / 230 / 295** |
+| Clustered | 4 | Fwd | 271 / 535 / 675 | **90 / 166 / 219** |
+| Clustered | 4 | Rev | 239 / 442 / 567 | **89 / 160 / 200** |
+| Hub | 2 | Fwd | 769 / 1,070 / 1,191 | **509 / 734 / 825** |
+| Hub | 2 | Rev | 773 / 1,067 / 1,198 | **510 / 725 / 820** |
+| Hub | 4 | Fwd | 38,785 / 58,729 / 65,531 | **17,824 / 26,861 / 30,232** |
+| Hub | 4 | Rev | 35,336 / 54,187 / 60,362 | **18,358 / 28,213 / 32,115** |
+
+**Reading it:** CSR+CSC is faster at p50, p95 and p99 in every row, so its advantage is not only a median effect. The smallest tail gap is about 1.3× (uniform 2-hop reverse p99, and uniform 4-hop forward p99: 597 vs 449 µs); on clustered and hub graphs the p99 gap is about 2–3×. In this data the tails are moderate: p99 is about 1.7–5× p50 for both layouts. Percentiles are computed per run and then averaged over seeds, so these are not pooled across seeds.
 
 One-hop lookups (the same 500 start vertices, read once, no expansion) at 20M edges. Time in µs per batch of 500; this is a best-case, cache-warm lookup cost, so treat it as supporting evidence only:
 
