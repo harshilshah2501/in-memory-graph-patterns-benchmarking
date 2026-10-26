@@ -14,7 +14,7 @@ Scope: **5M, 10M and 20M edges**, static graphs, forward and reverse RCA travers
 
 Only candidates that support **both** forward and reverse traversal are eligible, because RCA needs both. A forward-only hash (`forward_hash`) was also measured, but only as a reference baseline (§2).
 
-Results at the 20M-edge scale (lower is better; full tables in §5):
+Results at the 20M-edge scale (lower is better; full tables in §5). These six are the decision metrics; §3 lists the supporting and diagnostic metrics behind them.
 
 | Requirement | bidirectional_hash | csr_csc | csr_csc advantage |
 |---|---|---|---|
@@ -41,21 +41,23 @@ In CSR, the neighbors of vertex `v` are the contiguous slice `neighbors[offsets[
 
 ## 3. What each metric means
 
-| Metric | Definition | Why it matters for RCA | How to read it |
-|---|---|---|---|
-| **Build p50 (ms)** | Median time to construct the in-memory index from an in-memory edge list, over 3 timed trials after 1 warmup | Cost of building or rebuilding the index when data changes | Lower is better. Excludes reading from disk |
-| **One-hop forward/reverse (ms)** | Median time for a batch of single-step neighbor lookups | Raw adjacency lookup speed | Lower is better. Measures structure access cost only |
-| **RCA forward (µs)** | Median time for one multi-hop breadth-first expansion from a start vertex to everything it can reach within N hops (2, 3 and 4 hops), following out-edges, with a visited set | "What does this fault impact downstream?" | Lower is better. Grows steeply with hops and with hub vertices |
-| **RCA reverse (µs)** | The same expansion following in-edges | "What could have caused this symptom?" Reverse is the core RCA direction | Lower is better. `forward_hash` can't do this |
-| **Retained index bytes per edge** | Estimated bytes held by the finished index (arrays, hash nodes, vectors), divided by edge count | Memory footprint to keep the index resident | Lower is better. An analytic estimate, not allocator-exact |
-| **Peak RSS (MiB)** | Peak resident memory of the isolated benchmark process, which includes the input edge list and temporary build memory | Real memory you must provision, including during build | Lower is better. Higher than retained bytes because of build scratch space |
-| **Rebuild from source (ms)** | Time, in a fresh process, to read the durable edge file and build the index | Recovery when no snapshot exists | Lower is better |
-| **Snapshot load (ms)** | Time, in a fresh process, to read a pre-built binary index image from disk, validate it with a checksum, and make it queryable | Fast restart and recovery | Lower is better. Excludes the cost of writing the snapshot |
-| **Snapshot vs rebuild speedup** | Rebuild time divided by snapshot-load time | How much a snapshot helps | Higher is better. Below about 1.5× the saving is modest |
-| **Snapshot write (ms) and size (MiB)** | Cost and disk size to create the snapshot | One-time cost to enable fast recovery | Feeds the break-even count |
-| **Break-even restarts** | Snapshot write time divided by (rebuild time minus load time) | How many restarts before the snapshot pays for itself | Lower is better |
-| **Cache state** | `warm-process-restart` is a new process with the OS page cache uncontrolled. `best-effort-file-advice` asks the OS to drop the file's cached pages before loading | Recovery after a restart is highly sensitive to the page cache | **Neither is a strict cold-host guarantee** |
-| **Seed SD** | Population standard deviation of the per-seed means, across 3 seeds | Rough indicator of stability | Descriptive only, not a confidence interval |
+The **six decision metrics** (build, forward traversal, reverse traversal, retained index, rebuild from source, snapshot load) are the rows of the §1 table. The rest are **supporting** metrics, which give context or cost behind a decision metric, and **diagnostic** metrics, which tell you how far to trust the numbers. They are not compared across candidates on their own.
+
+| Role | Metric | Definition | Why it matters for RCA | How to read it |
+|---|---|---|---|---|
+| Decision | **Build p50 (ms)** | Median time to construct the in-memory index from an in-memory edge list, over 3 timed trials after 1 warmup | Cost of building or rebuilding the index when data changes | Lower is better. Excludes reading from disk |
+| Supporting | **One-hop forward/reverse (ms per batch of 500)** | Median time to read the full neighbor list of each of 500 start vertices, once, with no expansion | Raw adjacency lookup speed, separate from traversal logic | Lower is better. Repeated over the same 500 vertices, so it is cache-friendly and is a best-case lookup cost |
+| Decision | **RCA forward (µs)** | Median time for one multi-hop breadth-first expansion from a start vertex to everything it can reach within N hops (2, 3 and 4 hops), following out-edges, with a visited set | "What does this fault impact downstream?" | Lower is better. Grows steeply with hops and with hub vertices |
+| Decision | **RCA reverse (µs)** | The same expansion following in-edges | "What could have caused this symptom?" Reverse is the core RCA direction | Lower is better. Only the eligible candidates support it |
+| Decision | **Retained index bytes per edge** | Estimated bytes held by the finished index (arrays, hash nodes, vectors), divided by edge count | Memory footprint to keep the index resident | Lower is better. An analytic estimate, not allocator-exact |
+| Supporting | **Peak RSS (MiB)** | Peak resident memory of the isolated benchmark process, which includes the input edge list and temporary build memory | Real memory you must provision, including during build | Lower is better. Higher than retained bytes because of build scratch space |
+| Decision | **Rebuild from source (ms)** | Time, in a fresh process, to read the durable edge file and build the index | Recovery when no snapshot exists | Lower is better |
+| Decision | **Snapshot load (ms)** | Time, in a fresh process, to read a pre-built binary index image from disk, validate it with a checksum, and make it queryable | Fast restart and recovery | Lower is better. Excludes the cost of writing the snapshot |
+| Supporting | **Snapshot vs rebuild speedup** | Rebuild time divided by snapshot-load time | How much a snapshot helps | Higher is better. Below about 1.5× the saving is modest |
+| Supporting | **Snapshot write (ms) and size (MiB)** | Cost and disk size to create the snapshot | One-time cost to enable fast recovery | Feeds the break-even count |
+| Supporting | **Break-even restarts** | Snapshot write time divided by (rebuild time minus load time) | How many restarts before the snapshot pays for itself | Lower is better |
+| Diagnostic | **Cache state** | `warm-process-restart` is a new process with the OS page cache uncontrolled. `best-effort-file-advice` asks the OS to drop the file's cached pages before loading | Recovery after a restart is highly sensitive to the page cache | **Neither is a strict cold-host guarantee** |
+| Diagnostic | **Seed SD** | Population standard deviation of the per-seed means, across 3 seeds | Rough indicator of stability | Descriptive only, not a confidence interval |
 
 ## 4. Method
 
@@ -98,6 +100,16 @@ RCA p50 at 20M edges, in µs, by hop depth (uniform and hub shown; clustered is 
 | Clustered | 4 | 271 | **90** | 239 | **89** |
 
 **Reading it:** CSR+CSC is about 1.3–3× faster than bidirectional hash in the rows shown, in both directions. The smallest gap is uniform 2-hop reverse (2.9 vs 2.3 µs, about 1.3×), where both are tiny. Across 27 matched seed/distribution/hop comparisons at 20M, CSR+CSC had lower forward p50 than bidirectional hash in 27 of 27 and lower reverse p50 in 26 of 27. Hub 4-hop queries are about 100× slower than uniform because the expansion reaches a large fraction of the graph.
+
+One-hop lookups (the same 500 start vertices, read once, no expansion) at 20M edges. Time in µs per batch of 500; this is a best-case, cache-warm lookup cost, so treat it as supporting evidence only:
+
+| Distribution | Fwd: bidirectional | Fwd: csr_csc | Rev: bidirectional | Rev: csr_csc |
+|---|---|---|---|---|
+| Uniform | 10.4 | **6.2** | 11.6 | **6.2** |
+| Clustered | 8.7 | **4.6** | 8.2 | **4.4** |
+| Hub | 103.5 | **95.7** | **101.6** | 102.8 |
+
+On uniform and clustered graphs CSR+CSC is about 1.7–1.9× faster at the raw lookup, which matches the traversal gap. On hub graphs the gap closes (and reverse is a tie), because lookups are dominated by a few very long neighbor lists that both layouts scan sequentially. This shows the traversal advantage is mostly cache behavior and not only the lookup step.
 
 ### 5.3 Retained index and memory (requirement: retained index)
 
