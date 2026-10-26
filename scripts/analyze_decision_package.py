@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Join Phase 2 (build/query/memory) and Phase 3 (recovery) results into an omni-view
-decision package for the 5M-20M scope. No composite score is computed."""
+"""Join Phase 2 (build/query/memory) and Phase 3 (recovery) into an omni-view
+decision package. No composite score is computed."""
 import argparse
 import csv
 import json
@@ -10,7 +10,7 @@ from pathlib import Path
 
 CANDS = ["forward_hash", "bidirectional_hash", "csr_csc"]
 ELIGIBLE = ["bidirectional_hash", "csr_csc"]  # forward_hash lacks reverse traversal
-SCALES = [5_000_000, 10_000_000, 20_000_000]
+BASE_SCALES = [5_000_000, 10_000_000, 20_000_000]
 DISTS = ["uniform", "hub", "clustered"]
 
 
@@ -27,30 +27,67 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase2", default="artifacts/cross-scale-analysis/condition_summary.csv")
     ap.add_argument("--recovery-dir", default="artifacts/phase3-recovery-5m-20m-full-distributions")
+    ap.add_argument("--phase2-30m")
+    ap.add_argument("--recovery-dir-30m")
     ap.add_argument("--output-dir", default="artifacts/decision-package")
     a = ap.parse_args()
     out = Path(a.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     p2 = read(a.phase2)
-    rec_dir = Path(a.recovery_dir)
-    manifest = json.loads((rec_dir / "matrix_manifest.json").read_text())
-    rows = read(rec_dir / "matrix_results.csv")
-    seeds = read(rec_dir / "seed_summary.csv")
+    rows = []
+    seeds = []
+    manifests = []
+    for rec_path in [a.recovery_dir] + ([a.recovery_dir_30m] if a.recovery_dir_30m else []):
+        rec_dir = Path(rec_path)
+        manifests.append(json.loads((rec_dir / "matrix_manifest.json").read_text()))
+        rows.extend(read(rec_dir / "matrix_results.csv"))
+        seeds.extend(read(rec_dir / "seed_summary.csv"))
+
+    scales = list(BASE_SCALES)
+    if a.phase2_30m:
+        raw_30m = read(a.phase2_30m)
+        assert len(raw_30m) == 81, f"expected 81 30M Phase 2 rows, got {len(raw_30m)}"
+        assert len({(r["distribution"], r["hops"], r["seed"], r["representation"])
+                    for r in raw_30m}) == 81, "duplicate 30M Phase 2 identity"
+        grouped = defaultdict(list)
+        for r in raw_30m:
+            grouped[(int(r["edges"]), r["representation"], r["distribution"], int(r["hops"]))].append(r)
+        metrics = {
+            "build_p50_ms": "build_p50_ms_mean",
+            "rca_forward_p50_us": "rca_forward_p50_us_mean",
+            "rca_reverse_p50_us": "rca_reverse_p50_us_mean",
+            "retained_bytes_per_edge_est": "retained_bytes_per_edge_est_mean",
+            "peak_rss_kb": "peak_rss_kb_mean",
+        }
+        for (edges, candidate, distribution, hops), group in grouped.items():
+            record = {"edges": edges, "representation": candidate,
+                      "distribution": distribution, "hops": hops}
+            for source, target in metrics.items():
+                values = [f(r[source]) for r in group if r[source] != ""]
+                record[target] = st.mean(values) if values else ""
+            p2.append(record)
+        scales.append(30_000_000)
+    if a.recovery_dir_30m:
+        assert len([r for r in rows if int(r["edges"]) == 30_000_000]) == 108, \
+            "expected 108 30M recovery rows"
 
     # Coverage validation
-    assert len(rows) == 324, f"expected 324 recovery rows, got {len(rows)}"
     assert all(r["equivalence"] == "PASS" for r in rows), "equivalence failure"
     assert len({r["candidate"] for r in rows}) == 3
-    assert len(seeds) == 3 * 3 * 3 * 2, f"unexpected seed_summary rows {len(seeds)}"
-    assert len(p2) == 3 * 3 * 3 * 3, f"unexpected phase2 rows {len(p2)}"
+    expected_recovery_rows = 324 + (108 if a.recovery_dir_30m else 0)
+    expected_seed_rows = 3 * 3 * 2 * len(scales)
+    expected_phase2_rows = 3 * 3 * 3 * len(scales)
+    assert len(rows) == expected_recovery_rows, f"expected {expected_recovery_rows} recovery rows, got {len(rows)}"
+    assert len(seeds) == expected_seed_rows, f"expected {expected_seed_rows} seed_summary rows, got {len(seeds)}"
+    assert len(p2) == expected_phase2_rows, f"expected {expected_phase2_rows} phase2 rows, got {len(p2)}"
 
     # Phase 2 omni-view: mean over distributions and hops for each (scale, candidate)
     q = defaultdict(list)
     for r in p2:
         q[(int(r["edges"]), r["representation"], int(r["hops"]), r["distribution"])] = r
     omni = []
-    for e in SCALES:
+    for e in scales:
         for c in CANDS:
             sel = [r for r in p2 if int(r["edges"]) == e and r["representation"] == c]
             rec = [s for s in seeds if int(s["edges"]) == e and s["candidate"] == c]
@@ -77,7 +114,7 @@ def main():
             })
     cols = list(omni[0])
     with open(out / "omni_view.csv", "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=cols)
+        w = csv.DictWriter(fh, fieldnames=cols, lineterminator="\n")
         w.writeheader()
         w.writerows(omni)
 
@@ -97,7 +134,7 @@ def main():
                    "saving_per_restart_ms": rb - ld,
                    "break_even_restarts": wr / (rb - ld) if rb > ld else float("inf")})
     with open(out / "break_even.csv", "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(be[0]))
+        w = csv.DictWriter(fh, fieldnames=list(be[0]), lineterminator="\n")
         w.writeheader()
         w.writerows(be)
 
@@ -121,17 +158,17 @@ def main():
                 "retained_bytes_per_edge", "snapshot_load_ms_warm", "snapshot_load_rss_mib"],
     }
     pareto_rows = [{"edges": e, "family": k, "non_dominated": ";".join(pareto(d, e))}
-                   for e in SCALES for k, d in fams.items()]
+                   for e in scales for k, d in fams.items()]
     with open(out / "pareto_sets.csv", "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=["edges", "family", "non_dominated"])
+        w = csv.DictWriter(fh, fieldnames=["edges", "family", "non_dominated"], lineterminator="\n")
         w.writeheader()
         w.writerows(pareto_rows)
 
     # Report
-    L = ["# Decision package (5M-20M scope)", "",
+    L = [f"# Decision package ({scales[0]//1_000_000}M-{scales[-1]//1_000_000}M scope)", "",
          "Generated by `scripts/analyze_decision_package.py`. No composite score; values are",
          "means over 3 seeds, 3 distributions (and 3 hop depths for Phase 2 metrics).",
-         f"Recovery manifest keys: {', '.join(sorted(manifest))[:120]}; 324 rows, all equivalence PASS.", "",
+         f"Recovery rows: {len(rows)}, all equivalence PASS; manifests: {len(manifests)}.", "",
          "## Omni-view", "",
          "| Edges | Candidate | Build p50 ms | RCA fwd us | RCA rev us | B/edge | Query RSS MiB | Rebuild ms | Load ms (warm) | Speedup warm | Speedup advised | Load RSS MiB | Snapshot MiB |",
          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
@@ -152,11 +189,11 @@ def main():
     L += ["", "## Reading guide and workload-conditioned conclusions", "",
           "- forward_hash is a reference baseline only: it has no reverse traversal and is excluded from Pareto sets. Its cost reference: adding reverse support via bidirectional_hash costs ~1.7x memory; csr_csc provides both directions at fewer bytes/edge than forward_hash.",
           "- Between eligible candidates, csr_csc is non-dominated on every metric family at every scale; bidirectional_hash is dominated.",
-          "- Caveat: on hub graphs csr_csc build is on par with bidirectional_hash (see FINAL_REPORT.md); this table averages distributions.",
-          "- Recovery: csr_csc snapshot load is ~1.7-1.9x faster than rebuild (warm), ~1.3x with file advice; snapshot write repays after ~2-4.3 restarts.",
-          "- Conclusion (5M-20M, static graph, fwd+rev RCA): csr_csc; recovery gain is modest, so a snapshot is worthwhile only if restarts are frequent.", "",
+          "- Caveat: these tables average graph distributions; workload-specific exceptions and the 30M tail-latency caveat are discussed in FINAL_REPORT.md.",
+          "- At 30M, csr_csc snapshot load is ~1.24x faster than rebuild on warm restart and nearly tied under file advice; snapshot writing repays after ~3 warm restarts.",
+          "- Conclusion (5M-30M tested scope, static graph, fwd+rev RCA): csr_csc; recovery gains depend on cache state, so use snapshots when restart frequency or source-read costs justify them.", "",
           "## Limitations", "",
-          "- Scope is 5M-20M edges; 30M/40M/50M are untested.",
+          "- Scope is 5M-30M edges; 40M and 50M are untested.",
           "- Cache states are warm-process-restart and best-effort file advice; not strict cold-host.",
           "- Synthetic workloads, 3 seeds; seed SD is descriptive, not a confidence interval.",
           "- Snapshots are not fsynced (no crash-safety claim); FNV-1a catches accidental corruption only.",

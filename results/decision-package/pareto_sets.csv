@@ -14,3 +14,8 @@ edges,family,non_dominated
 20000000,memory,csr_csc
 20000000,recovery,csr_csc
 20000000,all,csr_csc
+30000000,build,csr_csc
+30000000,query,csr_csc
+30000000,memory,csr_csc
+30000000,recovery,csr_csc
+30000000,all,csr_csc

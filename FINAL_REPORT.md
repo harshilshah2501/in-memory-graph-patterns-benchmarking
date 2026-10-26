@@ -1,7 +1,7 @@
 # In-Memory Graph Representation Benchmark: Final Report
 
-Scope: **5M, 10M and 20M edges**, static graphs, forward and reverse RCA traversal.
-30M, 40M and 50M were deferred and are **not validated** (see §9).
+Scope: **5M, 10M, 20M and 30M edges**, static graphs, forward and reverse RCA traversal.
+40M and 50M remain untested (see §10).
 
 ## 1. Decision in one page
 
@@ -9,12 +9,12 @@ Scope: **5M, 10M and 20M edges**, static graphs, forward and reverse RCA travers
 
 | If your situation is... | Choose | Why |
 |---|---|---|
-| Bulk-built or periodically rebuilt graph, forward and reverse RCA queries, up to about 20M edges | **`csr_csc`** | About 2× faster traversal, about 44% less memory, faster rebuild, and faster build on most graph shapes (§5) |
-| You need frequent incremental edge insert or delete that can't be batched | `bidirectional_hash` (or a CSR base plus delta log, not yet benchmarked) | CSR is immutable. Hash maps allow in-place edits. Mutation was **not** benchmarked (§9) |
+| Bulk-built or periodically rebuilt graph, forward and reverse RCA queries, up to 30M tested edges | **`csr_csc`** | About 1.6–2× faster traversal, about 44% less memory, faster rebuild, and faster build on most graph shapes (§5) |
+| You need frequent incremental edge insert or delete that can't be batched | `bidirectional_hash` (or a CSR base plus delta log, not yet benchmarked) | CSR is immutable. Hash maps allow in-place edits. Mutation was **not** benchmarked (§10) |
 
 Only candidates that support **both** forward and reverse traversal are eligible, because RCA needs both. A forward-only hash (`forward_hash`) was also measured, but only as a reference baseline (§2).
 
-Results at the 20M-edge scale (lower is better; full tables in §5). These six are the decision metrics; §3 lists the supporting and diagnostic metrics behind them.
+Results at the 20M-edge scale (lower is better; §5.5 adds a 30M extension). These six are the decision metrics; §3 lists the supporting and diagnostic metrics behind them.
 
 | Requirement | bidirectional_hash | csr_csc | csr_csc advantage |
 |---|---|---|---|
@@ -169,6 +169,32 @@ Snapshot load p50 at 20M, mean over distributions, warm restart:
 
 **Reading it:** in absolute terms CSR+CSC recovers faster than bidirectional hash both ways (rebuild 2809 vs 3756 ms; snapshot load 1517 vs 1679 ms) and loads with about half the memory. Its *relative* snapshot speedup is smaller (1.35–1.9× against 1.7–2.3×) because its rebuild is already cheap: construction is a linear counting-sort pass. The practical meaning is that a CSR+CSC snapshot buys only a modest gain, and its snapshot takes about 4 restarts to repay its write cost, against about 3 for bidirectional hash. Treat the snapshot as an optional optimization for CSR+CSC, not a requirement. The forward-only baseline loads fastest only because it stores one direction (134 MiB), so it isn't a like-for-like comparison.
 
+### 5.5 30M-edge extension
+
+The 30M Phase 2 matrix completed all 81 candidate rows (3 distributions × 3 seeds × 3 candidates); every process exited successfully. The 30M recovery matrix covered 9 workloads and 108 rows (3 candidates × 2 operations × 2 cache states); all checksum/equivalence checks passed.
+
+Means across the three distributions, three hop depths, and three seeds; lower is better. Traversal percentiles are the average of each run's per-query percentile, not a percentile pooled across runs:
+
+| Requirement / diagnostic | bidirectional_hash | csr_csc | csr_csc comparison |
+|---|---:|---:|---|
+| Build p50 (ms) | 7,101 | **3,647** | 1.95× faster overall |
+| Forward traversal p50 (µs) | 12,950 | **7,304** | 1.77× faster |
+| Forward traversal p99 (µs) | 23,957 | **14,152** | 1.69× lower on average |
+| Reverse traversal p50 (µs) | 12,173 | **7,444** | 1.64× faster |
+| Reverse traversal p99 (µs) | 23,474 | **15,357** | 1.53× lower on average |
+| Retained index (bytes/edge) | 32.1 | **18.0** | 44% smaller |
+| Query-process peak RSS (MiB) | 1,358 | **919** | 32% lower |
+| Rebuild from durable source (ms) | 8,685 | **5,879** | 1.48× faster |
+| Snapshot load, warm restart (ms) | 3,557 | **2,865** | 1.24× faster |
+| Snapshot load, best-effort file advice (ms) | 4,309 | **4,265** | Approximately tied |
+| Snapshot break-even restarts (warm) | 1.6 | 3.0 | Snapshot write pays back later |
+
+**Interpretation:** the 30M data supports the CSR+CSC recommendation on the principal RCA criteria: it remains substantially faster on typical forward/reverse traversal, has the same 18-byte-per-edge retained footprint, and uses less peak query RSS than bidirectional hash. It also rebuilds faster. At 30M, however, snapshot-load performance depends on cache condition: CSR+CSC is faster on warm restart and nearly tied under best-effort file advice. Its faster rebuild means the snapshot write takes about 3 restarts to repay, compared with about 1.6 for bidirectional hash.
+
+**Tail caveat:** averaged p99 improves for CSR+CSC, but not in every individual workload. Hub 2-hop and clustered 4-hop include p99 reversals/outliers; with three seeds, treat those individual tail differences as signals to investigate, not as a stable ranking. The 30M results therefore strengthen the p50 and memory conclusion, while making clear that per-workload p99 needs more samples before setting an operational tail-latency guarantee.
+
+Build is distribution-sensitive. At 30M, CSR+CSC averaged about 3.2 s on uniform, 3.9 s on hub, and 3.8 s on clustered; its hub build is about tied with forward-only hash (3.9 s), while bidirectional hash is 5.2 s. Thus the hub build exception at 20M does not overturn the eligible two-way comparison at 30M.
+
 ## 6. Why `csr_csc` stands out
 
 1. **Contiguous memory.** A vertex's neighbors are one sequential slice. BFS reads sequentially and the hardware prefetcher helps. Hash candidates chase pointers: bucket, node, then a separately allocated vector. At tens of millions of edges these pointers miss the CPU cache, and that is where the ~2× traversal advantage comes from. The gap widens with hop depth (more neighbor lists scanned) and is largest on clustered graphs, where locality helps CSR most.
@@ -180,20 +206,20 @@ Snapshot load p50 at 20M, mean over distributions, warm restart:
 ## 7. How to choose, decisively
 
 1. **Does the graph change by small, frequent edits that can't be batched?** If yes, CSR alone is the wrong choice. Use `bidirectional_hash` (the only eligible mutable candidate benchmarked), or design a CSR base plus delta log and benchmark it before committing. If edits can be batched into periodic rebuilds, continue.
-2. **Otherwise choose `csr_csc`.** It is about 2× faster on deep traversals in both directions, uses about 44% less memory than bidirectional hash, and rebuilds faster on typical graph shapes.
-3. **Recovery strategy:** rebuilding from the source costs about 2.8 s at 20M and is already acceptable for many cases. Add a snapshot only if restarts are frequent (break-even is about 4 restarts at 20M) or if source reads are slow in your environment. Expect roughly a 1.4–1.9× improvement, not an order of magnitude.
+2. **Otherwise choose `csr_csc`.** Across tested scales through 30M, it uses about 44% less retained memory than bidirectional hash and delivers faster typical traversal and rebuild. Tail percentiles favor CSR+CSC on average, but the individual 30M p99 results are not uniformly better.
+3. **Recovery strategy:** at 30M, rebuild from the source costs about 5.9 s, and warm snapshot load about 2.9 s. Add a snapshot if restarts are frequent or source reads are slow, but account for about 3 warm restarts to repay snapshot writing; under best-effort file advice, load times are nearly tied.
 
 ## 8. Reliability of the evidence
 
-- Every row passes correctness and equivalence checks (243 Phase 2 rows, 324 recovery rows).
-- Rankings are consistent across 5M, 10M and 20M and across all three distributions, with the exceptions noted above (hub build, and the smaller relative snapshot speedup).
+- Every 30M Phase 2 process exited successfully; all 108 recovery rows pass equivalence. Prior 5M–20M matrices also passed their correctness/equivalence checks (243 Phase 2 summary rows, 324 recovery rows).
+- The broad candidate ordering remains consistent through 30M, with the caveats noted above (distribution-sensitive build and less decisive cache-advised recovery).
 - The relative gaps are much larger than the seed SD, but there are only 3 seeds, so treat SD as descriptive.
 
-## 9. Limitations (what this does not prove)
+## 10. Limitations (what this does not prove)
 
 | Limitation | Effect |
 |---|---|
-| Tested up to 20M edges only | 30M to 50M is extrapolated. Rankings are expected to hold because the mechanisms (cache locality, allocation count) strengthen with size, but this is unverified. Memory scales linearly, so 50M CSR+CSC needs roughly 1 GB of index |
+| Tested up to 30M edges only | 40M and 50M are untested. Do not extrapolate the recommendation to those sizes without measurement. Memory scales linearly; 50M CSR+CSC would need roughly 900 MB (about 858 MiB) for the retained index estimate alone |
 | No strict cold-host test | Recovery numbers are warm restart and best-effort file advice only. A real cold start from disk would be slower for every candidate, and is more sensitive to snapshot size |
 | Synthetic graphs | No production RCA traces and no edge-type-filtered queries. Real fan-out and locality may differ |
 | No update workload | Hash maps' mutability advantage is unmeasured |
@@ -202,9 +228,9 @@ Snapshot load p50 at 20M, mean over distributions, warm restart:
 | Shared 4 GiB, 2-CPU host | Relative results are trustworthy. Absolute times will differ on your hardware |
 | Cross-scale comparisons regenerate graphs | Matched in settings, but not identical edge prefixes |
 
-## 10. Next steps to close the gaps
+## 11. Next steps to close the gaps
 
-1. 30M and 40M runs (top-of-range check).
+1. 40M and, if host capacity permits, 50M runs (top-of-range check).
 2. Strict cold-host recovery test on a dedicated, reboot-able machine.
 3. Edge-type-filtered queries and production-trace workloads.
 4. A CSR-plus-delta prototype if updates matter.

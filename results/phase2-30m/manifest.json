@@ -1,0 +1,97 @@
+{
+  "manifest_schema_version": "1",
+  "benchmark_csv_schema_version": "v2",
+  "run_id": "20261026-061149",
+  "settings": {
+    "edges": [
+      30000000
+    ],
+    "distributions": [
+      "uniform",
+      "hub",
+      "clustered"
+    ],
+    "hops": [
+      2,
+      3,
+      4
+    ],
+    "seeds": [
+      20261021,
+      20261022,
+      20261023
+    ],
+    "trials": 3,
+    "warmups": 1,
+    "queries": 500,
+    "vertex_factor": 8
+  },
+  "run_count": 27,
+  "tools": {
+    "benchmark_binary": "./build/graph_storage_bench",
+    "rss_script": "./scripts/measure_peak_rss.sh",
+    "summary_script": "./scripts/summarize_benchmark_matrix.py"
+  },
+  "files": {
+    "consolidated_csv": "matrix_results.csv",
+    "seed_summary_csv": "seed_summary.csv",
+    "metadata": "run_metadata.txt",
+    "raw_directory": "raw/",
+    "raw_files": [
+      "raw/run0001_seed20261021_bench.csv",
+      "raw/run0001_seed20261021_rss.csv",
+      "raw/run0002_seed20261022_bench.csv",
+      "raw/run0002_seed20261022_rss.csv",
+      "raw/run0003_seed20261023_bench.csv",
+      "raw/run0003_seed20261023_rss.csv",
+      "raw/run0004_seed20261021_bench.csv",
+      "raw/run0004_seed20261021_rss.csv",
+      "raw/run0005_seed20261022_bench.csv",
+      "raw/run0005_seed20261022_rss.csv",
+      "raw/run0006_seed20261023_bench.csv",
+      "raw/run0006_seed20261023_rss.csv",
+      "raw/run0007_seed20261021_bench.csv",
+      "raw/run0007_seed20261021_rss.csv",
+      "raw/run0008_seed20261022_bench.csv",
+      "raw/run0008_seed20261022_rss.csv",
+      "raw/run0009_seed20261023_bench.csv",
+      "raw/run0009_seed20261023_rss.csv",
+      "raw/run0010_seed20261021_bench.csv",
+      "raw/run0010_seed20261021_rss.csv",
+      "raw/run0011_seed20261022_bench.csv",
+      "raw/run0011_seed20261022_rss.csv",
+      "raw/run0012_seed20261023_bench.csv",
+      "raw/run0012_seed20261023_rss.csv",
+      "raw/run0013_seed20261021_bench.csv",
+      "raw/run0013_seed20261021_rss.csv",
+      "raw/run0014_seed20261022_bench.csv",
+      "raw/run0014_seed20261022_rss.csv",
+      "raw/run0015_seed20261023_bench.csv",
+      "raw/run0015_seed20261023_rss.csv",
+      "raw/run0016_seed20261021_bench.csv",
+      "raw/run0016_seed20261021_rss.csv",
+      "raw/run0017_seed20261022_bench.csv",
+      "raw/run0017_seed20261022_rss.csv",
+      "raw/run0018_seed20261023_bench.csv",
+      "raw/run0018_seed20261023_rss.csv",
+      "raw/run0019_seed20261021_bench.csv",
+      "raw/run0019_seed20261021_rss.csv",
+      "raw/run0020_seed20261022_bench.csv",
+      "raw/run0020_seed20261022_rss.csv",
+      "raw/run0021_seed20261023_bench.csv",
+      "raw/run0021_seed20261023_rss.csv",
+      "raw/run0022_seed20261021_bench.csv",
+      "raw/run0022_seed20261021_rss.csv",
+      "raw/run0023_seed20261022_bench.csv",
+      "raw/run0023_seed20261022_rss.csv",
+      "raw/run0024_seed20261023_bench.csv",
+      "raw/run0024_seed20261023_rss.csv",
+      "raw/run0025_seed20261021_bench.csv",
+      "raw/run0025_seed20261021_rss.csv",
+      "raw/run0026_seed20261022_bench.csv",
+      "raw/run0026_seed20261022_rss.csv",
+      "raw/run0027_seed20261023_bench.csv",
+      "raw/run0027_seed20261023_rss.csv"
+    ]
+  }
+}

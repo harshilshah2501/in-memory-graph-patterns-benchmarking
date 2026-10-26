@@ -1,0 +1,83 @@
+{
+  "matrix_schema_version": "1",
+  "run_count": 9,
+  "validated_raw_rows": 108,
+  "candidates": [
+    "bidirectional_hash",
+    "csr_csc",
+    "forward_hash"
+  ],
+  "cache_states": [
+    "best-effort-file-advice",
+    "warm-process-restart"
+  ],
+  "operations": [
+    "snapshot-load",
+    "source-rebuild"
+  ],
+  "workloads": [
+    {
+      "edges": 30000000,
+      "distribution": "clustered",
+      "seed": 20261021
+    },
+    {
+      "edges": 30000000,
+      "distribution": "clustered",
+      "seed": 20261022
+    },
+    {
+      "edges": 30000000,
+      "distribution": "clustered",
+      "seed": 20261023
+    },
+    {
+      "edges": 30000000,
+      "distribution": "hub",
+      "seed": 20261021
+    },
+    {
+      "edges": 30000000,
+      "distribution": "hub",
+      "seed": 20261022
+    },
+    {
+      "edges": 30000000,
+      "distribution": "hub",
+      "seed": 20261023
+    },
+    {
+      "edges": 30000000,
+      "distribution": "uniform",
+      "seed": 20261021
+    },
+    {
+      "edges": 30000000,
+      "distribution": "uniform",
+      "seed": 20261022
+    },
+    {
+      "edges": 30000000,
+      "distribution": "uniform",
+      "seed": 20261023
+    }
+  ],
+  "equivalence": "PASS",
+  "seed_variability": "Descriptive population standard deviation across available fixed seeds; not a confidence interval.",
+  "cache_limit": "best-effort POSIX_FADV_DONTNEED only; no guaranteed cold-cache or cold-host measurements.",
+  "run_ids": [
+    "20261026-091325695762075",
+    "20261026-092117428370539",
+    "20261026-092902390362033",
+    "20261026-093636982836881",
+    "20261026-094252755619031",
+    "20261026-094858661239806",
+    "20261026-095520970640807",
+    "20261026-100322723841691",
+    "20261026-101043549915464"
+  ],
+  "outputs": {
+    "matrix_results.csv": 36216,
+    "seed_summary.csv": 3520
+  }
+}

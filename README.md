@@ -186,8 +186,11 @@ python3 scripts/summarize_graph_recovery_matrix.py \
 
 The summarizer checks per-run candidate/operation/cache coverage and checksums,
 then writes the combined rows, per-seed descriptive summaries, and a matrix
-manifest. This complete dataset covers 5M, 10M, and 20M; uniform, hub, and
-clustered workloads; and three seeds. The 30M and 40M scales remain deferred.
+manifest. This dataset covers 5M, 10M, and 20M; uniform, hub, and clustered
+workloads; and three seeds. A separate 30M all-distribution recovery matrix is
+preserved under `results/recovery-30m/`, with its Phase 2 matrix under
+`results/phase2-30m/`. The final report and decision package include results
+through 30M; 40M remains deferred.
 
 ## Scope and next experiment
 
