@@ -27,7 +27,9 @@ Results at the 20M-edge scale (lower is better; full tables in §5). These six a
 
 ## 2. What the candidates are
 
-All three store the same data: directed edges, each with a 32-bit source, 32-bit target and 16-bit edge type. Vertices are dense integer ids. A neighbor entry is `{vertex: u32, type: u16}`, which is 8 bytes with padding.
+All three store the same data: directed edges, each with a 32-bit source, 32-bit target and 16-bit edge type. Vertices are dense integer ids. **Edge convention:** an edge A → B means "A depends on B". *Forward* traversal (out-edges) walks dependencies, which is how candidate root causes are found. *Reverse* traversal (in-edges) finds dependents, which is blast-radius analysis. RCA workflows need both. The benchmark only follows out-edges or in-edges, so timings are the same under the opposite convention; only these labels would swap.
+
+A neighbor entry is `{vertex: u32, type: u16}`, which is 8 bytes with padding.
 
 | Candidate | Layout | Reverse traversal | Status |
 |---|---|---|---|
@@ -47,8 +49,8 @@ The **six decision metrics** (build, forward traversal, reverse traversal, retai
 |---|---|---|---|---|
 | Decision | **Build p50 (ms)** | Median time to construct the in-memory index from an in-memory edge list, over 3 timed trials after 1 warmup | Cost of building or rebuilding the index when data changes | Lower is better. Excludes reading from disk |
 | Supporting | **One-hop forward/reverse (ms per batch of 500)** | Median time to read the full neighbor list of each of 500 start vertices, once, with no expansion | Raw adjacency lookup speed, separate from traversal logic | Lower is better. Repeated over the same 500 vertices, so it is cache-friendly and is a best-case lookup cost |
-| Decision | **RCA forward (µs)** | Median time for one multi-hop breadth-first expansion from a start vertex to everything it can reach within N hops (2, 3 and 4 hops), following out-edges, with a visited set | "What does this fault impact downstream?" | Lower is better. Grows steeply with hops and with hub vertices |
-| Decision | **RCA reverse (µs)** | The same expansion following in-edges | "What could have caused this symptom?" Reverse is the core RCA direction | Lower is better. Only the eligible candidates support it |
+| Decision | **RCA forward (µs)** | Median time for one multi-hop breadth-first expansion from a start vertex to everything it can reach within N hops (2, 3 and 4 hops), following out-edges, with a visited set | "What does this node depend on?" Walks dependencies to find candidate root causes | Lower is better. Grows steeply with hops and with hub vertices |
+| Decision | **RCA reverse (µs)** | The same expansion following in-edges | "Who depends on this node?" This is blast-radius (impact) analysis | Lower is better. Only the eligible candidates support it |
 | Decision | **Retained index bytes per edge** | Estimated bytes held by the finished index (arrays, hash nodes, vectors), divided by edge count | Memory footprint to keep the index resident | Lower is better. An analytic estimate, not allocator-exact |
 | Supporting | **Peak RSS (MiB)** | Peak resident memory of the isolated benchmark process, which includes the input edge list and temporary build memory | Real memory you must provision, including during build | Lower is better. Higher than retained bytes because of build scratch space |
 | Decision | **Rebuild from source (ms)** | Time, in a fresh process, to read the durable edge file and build the index | Recovery when no snapshot exists | Lower is better |
