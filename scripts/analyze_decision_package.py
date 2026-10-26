@@ -9,6 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 
 CANDS = ["forward_hash", "bidirectional_hash", "csr_csc"]
+ELIGIBLE = ["bidirectional_hash", "csr_csc"]  # forward_hash lacks reverse traversal
 SCALES = [5_000_000, 10_000_000, 20_000_000]
 DISTS = ["uniform", "hub", "clustered"]
 
@@ -102,7 +103,7 @@ def main():
 
     # Pareto non-dominated sets at each scale; dimensions are lower-is-better
     def pareto(dims, scale):
-        pts = [o for o in omni if o["edges"] == scale]
+        pts = [o for o in omni if o["edges"] == scale and o["candidate"] in ELIGIBLE]
         nd = []
         for p in pts:
             dom = any(all(o[d] <= p[d] for d in dims) and any(o[d] < p[d] for d in dims)
@@ -144,16 +145,16 @@ def main():
     for b in be:
         L.append(f"| {b['edges']//10**6}M | {b['candidate']} | {b['snapshot_write_ms']:.0f} | {b['rebuild_ms']:.0f} | "
                  f"{b['load_ms']:.0f} | {b['break_even_restarts']:.2f} |")
-    L += ["", "## Pareto non-dominated candidates by metric family", "",
+    L += ["", "## Pareto non-dominated candidates by metric family (eligible candidates only: bidirectional_hash, csr_csc)", "",
           "| Edges | Family | Non-dominated |", "|---|---|---|"]
     for p in pareto_rows:
         L.append(f"| {p['edges']//10**6}M | {p['family']} | {p['non_dominated']} |")
     L += ["", "## Reading guide and workload-conditioned conclusions", "",
-          "- forward_hash has no native reverse traversal (n/a); it is non-dominated on recovery/`all` only because it is smallest to load, and it fails the reverse-RCA requirement.",
-          "- csr_csc is non-dominated on build, query and memory at every scale and the best full-requirement candidate (fwd+rev) on those axes.",
-          "- bidirectional_hash is dominated by csr_csc on build, query and memory, and loads slower than the forward-only hash; its advantage is mutability, which is not benchmarked here.",
+          "- forward_hash is a reference baseline only: it has no reverse traversal and is excluded from Pareto sets. Its cost reference: adding reverse support via bidirectional_hash costs ~1.7x memory; csr_csc provides both directions at fewer bytes/edge than forward_hash.",
+          "- Between eligible candidates, csr_csc is non-dominated on every metric family at every scale; bidirectional_hash is dominated.",
+          "- Caveat: on hub graphs csr_csc build is on par with bidirectional_hash (see FINAL_REPORT.md); this table averages distributions.",
           "- Recovery: csr_csc snapshot load is ~1.7-1.9x faster than rebuild (warm), ~1.3x with file advice; snapshot write repays after ~2-4.3 restarts.",
-          "- Conclusion (5M-20M, static graph, fwd+rev RCA): csr_csc is the leading candidate; recovery gain is modest, so a snapshot is worthwhile only if restarts are frequent.", "",
+          "- Conclusion (5M-20M, static graph, fwd+rev RCA): csr_csc; recovery gain is modest, so a snapshot is worthwhile only if restarts are frequent.", "",
           "## Limitations", "",
           "- Scope is 5M-20M edges; 30M/40M/50M are untested.",
           "- Cache states are warm-process-restart and best-effort file advice; not strict cold-host.",

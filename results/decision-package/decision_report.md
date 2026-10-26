@@ -32,33 +32,33 @@ Recovery manifest keys: cache_limit, cache_states, candidates, equivalence, matr
 | 20M | csr_csc | 5559 | 2809 | 1517 | 4.30 |
 | 20M | forward_hash | 3363 | 3610 | 833 | 1.21 |
 
-## Pareto non-dominated candidates by metric family
+## Pareto non-dominated candidates by metric family (eligible candidates only: bidirectional_hash, csr_csc)
 
 | Edges | Family | Non-dominated |
 |---|---|---|
 | 5M | build | csr_csc |
 | 5M | query | csr_csc |
 | 5M | memory | csr_csc |
-| 5M | recovery | forward_hash |
-| 5M | all | forward_hash;csr_csc |
+| 5M | recovery | csr_csc |
+| 5M | all | csr_csc |
 | 10M | build | csr_csc |
 | 10M | query | csr_csc |
 | 10M | memory | csr_csc |
-| 10M | recovery | forward_hash |
-| 10M | all | forward_hash;csr_csc |
+| 10M | recovery | csr_csc |
+| 10M | all | csr_csc |
 | 20M | build | csr_csc |
 | 20M | query | csr_csc |
 | 20M | memory | csr_csc |
-| 20M | recovery | forward_hash |
-| 20M | all | forward_hash;csr_csc |
+| 20M | recovery | csr_csc |
+| 20M | all | csr_csc |
 
 ## Reading guide and workload-conditioned conclusions
 
-- forward_hash has no native reverse traversal (n/a); it is non-dominated on recovery/`all` only because it is smallest to load, and it fails the reverse-RCA requirement.
-- csr_csc is non-dominated on build, query and memory at every scale and the best full-requirement candidate (fwd+rev) on those axes.
-- bidirectional_hash is dominated by csr_csc on build, query and memory, and loads slower than the forward-only hash; its advantage is mutability, which is not benchmarked here.
+- forward_hash is a reference baseline only: it has no reverse traversal and is excluded from Pareto sets. Its cost reference: adding reverse support via bidirectional_hash costs ~1.7x memory; csr_csc provides both directions at fewer bytes/edge than forward_hash.
+- Between eligible candidates, csr_csc is non-dominated on every metric family at every scale; bidirectional_hash is dominated.
+- Caveat: on hub graphs csr_csc build is on par with bidirectional_hash (see FINAL_REPORT.md); this table averages distributions.
 - Recovery: csr_csc snapshot load is ~1.7-1.9x faster than rebuild (warm), ~1.3x with file advice; snapshot write repays after ~2-4.3 restarts.
-- Conclusion (5M-20M, static graph, fwd+rev RCA): csr_csc is the leading candidate; recovery gain is modest, so a snapshot is worthwhile only if restarts are frequent.
+- Conclusion (5M-20M, static graph, fwd+rev RCA): csr_csc; recovery gain is modest, so a snapshot is worthwhile only if restarts are frequent.
 
 ## Limitations
 

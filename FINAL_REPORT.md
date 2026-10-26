@@ -9,31 +9,33 @@ Scope: **5M, 10M and 20M edges**, static graphs, forward and reverse RCA travers
 
 | If your situation is... | Choose | Why |
 |---|---|---|
-| Bulk-built or periodically rebuilt graph, forward and reverse RCA queries, up to about 20M edges | **`csr_csc`** | About 2× faster traversal, lowest memory, and fastest to build on most graph shapes (§5) |
-| You need frequent incremental edge insert or delete, and can't batch it | `bidirectional_hash` (or a CSR base plus delta log, not yet benchmarked) | CSR is immutable. Hash maps allow in-place edits. Mutation was **not** benchmarked (§9) |
-| Only forward traversal is needed and fastest restart matters | `forward_hash` | Fastest snapshot load. It cannot do reverse traversal, so it fails the RCA requirement |
-| You aren't sure | `csr_csc` | It is the best or near-best on every requirement except snapshot-load speed |
+| Bulk-built or periodically rebuilt graph, forward and reverse RCA queries, up to about 20M edges | **`csr_csc`** | About 2× faster traversal, about 44% less memory, faster rebuild, and faster build on most graph shapes (§5) |
+| You need frequent incremental edge insert or delete that can't be batched | `bidirectional_hash` (or a CSR base plus delta log, not yet benchmarked) | CSR is immutable. Hash maps allow in-place edits. Mutation was **not** benchmarked (§9) |
+
+Only candidates that support **both** forward and reverse traversal are eligible, because RCA needs both. A forward-only hash (`forward_hash`) was also measured, but only as a reference baseline (§2).
 
 Results at the 20M-edge scale (lower is better; full tables in §5):
 
-| Requirement | forward_hash | bidirectional_hash | csr_csc |
+| Requirement | bidirectional_hash | csr_csc | csr_csc advantage |
 |---|---|---|---|
-| Build index (ms) | 3046 | 2991 | **1804** |
-| Forward traversal (µs) | 6898 | 7506 | **3725** |
-| Reverse traversal (µs) | not supported | 6997 | **3881** |
-| Retained index (bytes per edge) | 19.3 | 32.0 | **18.0** |
-| Rebuild from source (ms) | 3610 | 3756 | **2809** |
-| Snapshot load (ms, warm) | **833** | 1679 | 1517 |
+| Build index (ms) | 2991 | **1804** | 1.7× faster (not on hub graphs, §5.1) |
+| Forward traversal (µs) | 7506 | **3725** | 2.0× faster |
+| Reverse traversal (µs) | 6997 | **3881** | 1.8× faster |
+| Retained index (bytes per edge) | 32.0 | **18.0** | 44% smaller |
+| Rebuild from source (ms) | 3756 | **2809** | 1.3× faster |
+| Snapshot load (ms, warm) | 1679 | **1517** | 10% faster |
 
 ## 2. What the candidates are
 
 All three store the same data: directed edges, each with a 32-bit source, 32-bit target and 16-bit edge type. Vertices are dense integer ids. A neighbor entry is `{vertex: u32, type: u16}`, which is 8 bytes with padding.
 
-| Candidate | Layout | Reverse traversal |
-|---|---|---|
-| `forward_hash` | `unordered_map<vertex, vector<neighbor>>` holding out-edges only | Not supported |
-| `bidirectional_hash` | Two such maps, one for out-edges and one for in-edges | Native |
-| `csr_csc` | Out-edges in one flat array plus an offsets array (CSR); in-edges the same way (CSC). Neighbor lists are sorted | Native |
+| Candidate | Layout | Reverse traversal | Status |
+|---|---|---|---|
+| `bidirectional_hash` | Two maps, `unordered_map<vertex, vector<neighbor>>`, one for out-edges and one for in-edges | Native | **Eligible** |
+| `csr_csc` | Out-edges in one flat array plus an offsets array (CSR); in-edges the same way (CSC). Neighbor lists are sorted | Native | **Eligible** |
+| `forward_hash` | One such map holding out-edges only | Not supported | Reference baseline, **not eligible** |
+
+`forward_hash` is kept in the data only to show what supporting reverse traversal costs. Going from `forward_hash` to `bidirectional_hash` raises memory from about 19.3 to 32.0 bytes per edge (1.7×), while `csr_csc` provides both directions at 18.0, below even the forward-only hash. It appears in the tables below as a marked baseline column or row. It is excluded from every ranking and from the decision.
 
 In CSR, the neighbors of vertex `v` are the contiguous slice `neighbors[offsets[v] .. offsets[v+1])`. Looking up a vertex is two array reads, and walking its neighbors is a sequential memory scan. In a hash map, the same lookup hashes the key, follows a bucket pointer to a node, and then follows a pointer to a separately allocated vector.
 
@@ -72,76 +74,75 @@ In CSR, the neighbors of vertex `v` are the contiguous slice `neighbors[offsets[
 
 Build p50 in ms at 20M edges, by graph shape:
 
-| Distribution | forward_hash | bidirectional_hash | csr_csc |
+| Distribution | bidirectional_hash | csr_csc | *(baseline) forward_hash* |
 |---|---|---|---|
-| Uniform | 3521 | 3488 | **1621** |
-| Clustered | 3681 | 3443 | **1661** |
-| Hub | **1555** | 1962 | 2004 |
-| Mean of all three | 3046 | 2991 | **1804** |
+| Uniform | 3488 | **1621** | *3521* |
+| Clustered | 3443 | **1661** | *3681* |
+| Hub | **1962** | 2004 | *1555* |
+| Mean of all three | 2991 | **1804** | *3046* |
 
-**Reading it:** on uniform and clustered graphs CSR+CSC builds about 2.1× faster than either hash candidate. **On hub-heavy graphs it does not win**: it is on par with bidirectional hash and slower than forward hash (which only builds one direction). Don't treat "CSR builds fastest" as universal.
+**Reading it:** on uniform and clustered graphs CSR+CSC builds about 2.1× faster than bidirectional hash. **On hub-heavy graphs it does not win**: it is about the same as bidirectional hash (2004 vs 1962 ms). Don't treat "CSR builds fastest" as universal.
 
-Rebuild from the durable source (file read plus build, warm restart), mean over distributions at 20M: forward_hash 3610 ms, bidirectional_hash 3756 ms, **csr_csc 2809 ms**. The ordering is the same at 5M and 10M.
+Rebuild from the durable source (file read plus build, warm restart), mean over distributions at 20M: bidirectional_hash 3756 ms, **csr_csc 2809 ms** (baseline forward_hash: 3610 ms). The ordering is the same at 5M and 10M.
 
 ### 5.2 Forward and reverse traversal (requirements: forward and backward traversal)
 
 RCA p50 at 20M edges, in µs, by hop depth (uniform and hub shown; clustered is similar to uniform):
 
-| Distribution | Hops | Fwd: forward_hash | Fwd: bidirectional | Fwd: csr_csc | Rev: bidirectional | Rev: csr_csc |
-|---|---|---|---|---|---|---|
-| Uniform | 2 | 4.1 | 4.0 | **2.2** | 2.9 | 2.3 |
-| Uniform | 4 | 214 | 251 | **111** | 271 | **125** |
-| Hub | 2 | 765 | 769 | **509** | 773 | **510** |
-| Hub | 4 | 36,021 | 38,785 | **17,824** | 35,336 | **18,358** |
-| Clustered | 4 | 205 | 271 | **90** | 239 | **89** |
+| Distribution | Hops | Fwd: bidirectional | Fwd: csr_csc | Rev: bidirectional | Rev: csr_csc |
+|---|---|---|---|---|---|
+| Uniform | 2 | 4.0 | **2.2** | 2.9 | **2.3** |
+| Uniform | 4 | 251 | **111** | 271 | **125** |
+| Hub | 2 | 769 | **509** | 773 | **510** |
+| Hub | 4 | 38,785 | **17,824** | 35,336 | **18,358** |
+| Clustered | 4 | 271 | **90** | 239 | **89** |
 
-**Reading it:** CSR+CSC is about 1.8–3× faster than both hash candidates in the rows shown, in both directions. The smallest gap is uniform 2-hop reverse (2.9 vs 2.3 µs, about 1.3×), where both are tiny. Across 27 matched seed/distribution/hop comparisons at 20M, CSR+CSC had lower forward p50 than both hash candidates in 27 of 27, and lower reverse p50 than bidirectional hash in 26 of 27. Hub 4-hop queries are about 100× slower than uniform because the expansion reaches a large fraction of the graph.
+**Reading it:** CSR+CSC is about 1.3–3× faster than bidirectional hash in the rows shown, in both directions. The smallest gap is uniform 2-hop reverse (2.9 vs 2.3 µs, about 1.3×), where both are tiny. Across 27 matched seed/distribution/hop comparisons at 20M, CSR+CSC had lower forward p50 than bidirectional hash in 27 of 27 and lower reverse p50 in 26 of 27. Hub 4-hop queries are about 100× slower than uniform because the expansion reaches a large fraction of the graph.
 
 ### 5.3 Retained index and memory (requirement: retained index)
 
 Constant across scales and almost constant across distributions:
 
-| | forward_hash | bidirectional_hash | csr_csc |
+| | bidirectional_hash | csr_csc | *(baseline) forward_hash* |
 |---|---|---|---|
-| Retained bytes per edge | 18.9–20.0 | 32.0 | **18.0** |
-| Query-process peak RSS at 20M (MiB, mean) | 656 | 904 | **614** |
+| Retained bytes per edge | 32.0 | **18.0** | *18.9–20.0* |
+| Query-process peak RSS at 20M (MiB, mean) | 904 | **614** | *656* |
 
-**Reading it:** CSR+CSC holds **both directions** in about the space the forward-only hash needs for one. Bidirectional hash needs about 1.8× more.
+**Reading it:** CSR+CSC holds **both directions** in about the space a forward-only hash needs for one. Bidirectional hash needs about 1.8× more.
 
 ### 5.4 Recovery and reconstruction (requirement: quick recovery)
 
 Snapshot load p50 at 20M, mean over distributions, warm restart:
 
-| | forward_hash | bidirectional_hash | csr_csc |
+| | bidirectional_hash | csr_csc | *(baseline) forward_hash* |
 |---|---|---|---|
-| Snapshot load (ms) | **833** | 1679 | 1517 |
-| Load peak RSS (MiB) | 321 | 637 | 347 |
-| Snapshot size (MiB) | **134** | 267 | 267 |
-| Speedup vs rebuild, warm | 4.3× | 2.3× | 1.85× |
-| Speedup vs rebuild, file-advice | 3.4× | 1.7× | 1.35× |
-| Break-even restarts (warm) | 1.2 | 2.8 | 4.3 |
+| Snapshot load (ms) | 1679 | **1517** | *833* |
+| Load peak RSS (MiB) | 637 | **347** | *321* |
+| Snapshot size (MiB) | 267 | 267 | *134* |
+| Speedup vs rebuild, warm | **2.3×** | 1.85× | *4.3×* |
+| Speedup vs rebuild, file-advice | **1.7×** | 1.35× | *3.4×* |
+| Break-even restarts (warm) | **2.8** | 4.3 | *1.2* |
 
-**Reading it:** this is the one area where CSR+CSC is not the leader. A snapshot of CSR+CSC makes recovery only about 1.4–1.9× faster than rebuilding from the edge source. Rebuild is already cheap because CSR construction is a linear counting-sort pass. By contrast, `forward_hash` gets the biggest speedup because it has the slowest rebuild relative to its simple load. Still, in absolute terms **CSR+CSC rebuilds faster (2809 ms) than the other hash candidates, and its snapshot load (1517 ms) is about equal to bidirectional hash**. Both directions are needed for RCA, so the like-for-like comparison is CSR+CSC against bidirectional hash.
+**Reading it:** in absolute terms CSR+CSC recovers faster than bidirectional hash both ways (rebuild 2809 vs 3756 ms; snapshot load 1517 vs 1679 ms) and loads with about half the memory. Its *relative* snapshot speedup is smaller (1.35–1.9× against 1.7–2.3×) because its rebuild is already cheap: construction is a linear counting-sort pass. The practical meaning is that a CSR+CSC snapshot buys only a modest gain, and its snapshot takes about 4 restarts to repay its write cost, against about 3 for bidirectional hash. Treat the snapshot as an optional optimization for CSR+CSC, not a requirement. The forward-only baseline loads fastest only because it stores one direction (134 MiB), so it isn't a like-for-like comparison.
 
 ## 6. Why `csr_csc` stands out
 
 1. **Contiguous memory.** A vertex's neighbors are one sequential slice. BFS reads sequentially and the hardware prefetcher helps. Hash candidates chase pointers: bucket, node, then a separately allocated vector. At tens of millions of edges these pointers miss the CPU cache, and that is where the ~2× traversal advantage comes from. The gap widens with hop depth (more neighbor lists scanned) and is largest on clustered graphs, where locality helps CSR most.
 2. **No per-vertex allocations.** A hash map allocates a node and a vector per vertex (about 2.5M separate allocations at 20M edges, ×2 for bidirectional). CSR uses four flat arrays. This is why memory is lower (18 vs 32 bytes per edge) and why bulk build is faster on uniform and clustered graphs, which are dominated by allocation and insertion cost.
 3. **Offsets are cheap.** Both directions cost 8 bytes per edge each plus a small offsets array, giving 18.0 bytes per edge for forward and reverse together.
-4. **Why it loses on some axes:** CSR build does counting-sort passes and sorts each neighbor list for both directions. On hub graphs, a few huge lists make that sort comparatively costly, so a forward-only hash (one direction, no sort) builds faster. Snapshot load for CSR+CSC reads two directions' worth of data (267 MiB), so it is slower than the one-direction `forward_hash` (134 MiB).
+4. **Where the advantage shrinks:** CSR build does counting-sort passes and sorts each neighbor list for both directions. On hub graphs, a few huge lists make that sort comparatively costly, so its build advantage disappears there. Its relative snapshot speedup is also smaller than bidirectional hash's, because its rebuild is already cheap.
 5. **The price:** CSR is **immutable**. Adding or removing an edge means rebuilding or maintaining a separate delta. The benchmark doesn't measure this, because for bulk-built RCA indexes it's usually not the constraint.
 
 ## 7. How to choose, decisively
 
-1. **Does the graph change by small, frequent edits that can't be batched?** If yes, CSR alone is the wrong choice. Use `bidirectional_hash`, or design a CSR base plus delta log and benchmark it before committing. If edits can be batched into periodic rebuilds, continue.
-2. **Do you need reverse traversal?** If no, `forward_hash` is acceptable and has the fastest recovery. RCA normally needs reverse, so this branch usually doesn't apply.
-3. **Otherwise choose `csr_csc`.** It is about 2× faster on deep traversals in both directions, uses about 44% less memory than bidirectional hash, and rebuilds faster on typical graph shapes.
-4. **Recovery strategy:** rebuilding from the source costs about 2.8 s at 20M and is already acceptable for many cases. Add a snapshot only if restarts are frequent (break-even is about 4 restarts at 20M) or if source reads are slow in your environment. Expect roughly a 1.4–1.9× improvement, not an order of magnitude.
+1. **Does the graph change by small, frequent edits that can't be batched?** If yes, CSR alone is the wrong choice. Use `bidirectional_hash` (the only eligible mutable candidate benchmarked), or design a CSR base plus delta log and benchmark it before committing. If edits can be batched into periodic rebuilds, continue.
+2. **Otherwise choose `csr_csc`.** It is about 2× faster on deep traversals in both directions, uses about 44% less memory than bidirectional hash, and rebuilds faster on typical graph shapes.
+3. **Recovery strategy:** rebuilding from the source costs about 2.8 s at 20M and is already acceptable for many cases. Add a snapshot only if restarts are frequent (break-even is about 4 restarts at 20M) or if source reads are slow in your environment. Expect roughly a 1.4–1.9× improvement, not an order of magnitude.
 
 ## 8. Reliability of the evidence
 
 - Every row passes correctness and equivalence checks (243 Phase 2 rows, 324 recovery rows).
-- Rankings are consistent across 5M, 10M and 20M and across all three distributions, with the exceptions noted above (hub build, snapshot load).
+- Rankings are consistent across 5M, 10M and 20M and across all three distributions, with the exceptions noted above (hub build, and the smaller relative snapshot speedup).
 - The relative gaps are much larger than the seed SD, but there are only 3 seeds, so treat SD as descriptive.
 
 ## 9. Limitations (what this does not prove)
